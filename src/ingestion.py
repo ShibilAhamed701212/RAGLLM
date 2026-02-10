@@ -5,10 +5,13 @@ Ingestion — Load documents, chunk them, and build a FAISS vector index.
 import concurrent.futures
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
+import requests
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 
 from src.config import DATA_DIR, VECTOR_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 from src.utils import get_embeddings
@@ -49,6 +52,45 @@ def load_documents(source_dir: Path = DATA_DIR) -> List:
         batches = list(pool.map(_load_single, files))
 
     return [doc for batch in batches for doc in batch]
+
+
+# ── URL Ingestion ──────────────────────────────────────────────────────────────
+
+def ingest_url(url: str) -> tuple[bool, str]:
+    """Fetch a web page and save its text content for indexing.
+
+    Returns (success, message).
+    """
+    try:
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (ProRAG Bot)"
+        })
+        resp.raise_for_status()
+
+        # Extract text — try to strip HTML tags simply
+        content = resp.text
+        if "<html" in content.lower():
+            # Basic HTML stripping
+            import re
+            content = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.S)
+            content = re.sub(r"<style[^>]*>.*?</style>", "", content, flags=re.S)
+            content = re.sub(r"<[^>]+>", " ", content)
+            content = re.sub(r"\s+", " ", content).strip()
+
+        if not content or len(content) < 50:
+            return False, "Page content too short or empty."
+
+        # Save as text file
+        domain = urlparse(url).netloc.replace(".", "_")
+        path_slug = urlparse(url).path.strip("/").replace("/", "_")[:50]
+        filename = f"web_{domain}_{path_slug}.txt" if path_slug else f"web_{domain}.txt"
+
+        DATA_DIR.mkdir(exist_ok=True)
+        (DATA_DIR / filename).write_text(content, encoding="utf-8")
+
+        return True, f"Saved as {filename} ({len(content)} chars)"
+    except Exception as exc:
+        return False, str(exc)
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────────

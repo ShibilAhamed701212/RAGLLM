@@ -13,15 +13,32 @@ A powerful **Retrieval-Augmented Generation (RAG)** chatbot that lets you chat w
 
 ## ✨ Features
 
-- 🔒 **Fully Local & Private** — Your documents never leave your machine. No cloud APIs required.
-- 🧠 **Dynamic Model Switching** — Switch between any locally installed Ollama model from the UI.
-- 📥 **Download Models from UI** — Pull new Ollama models directly from the sidebar without using the terminal.
-- 🎯 **Focus Mode** — Narrow the AI's attention to a single document for precise answers.
-- 📄 **Multi-Format Support** — Upload and chat with PDFs, `.txt`, and `.md` files.
-- ⚡ **Streaming Responses** — Real-time token-by-token output for a smooth chat experience.
-- 🔍 **Source Attribution** — Every answer comes with expandable source references.
-- 🖥️ **CLI Mode** — Prefer the terminal? Use `cli.py` for a command-line chat interface.
-- 🔧 **Configurable** — Tune temperature, search depth, chunk size, and more via `.env` or the UI.
+### 🔒 Core
+- **Fully Local & Private** — Your documents never leave your machine. No cloud APIs required.
+- **Multi-Format Support** — Upload and chat with PDFs, `.txt`, and `.md` files.
+- **🌐 URL Ingestion** — Paste any web URL to fetch and index the page content.
+- **⚡ Streaming Responses** — Real-time token-by-token output for a smooth chat experience.
+- **🖥️ CLI Mode** — Prefer the terminal? Use `cli.py` for a command-line chat interface.
+
+### 🧠 Intelligence
+- **💬 Conversation Memory** — Follow-up questions work naturally with 6-turn context window.
+- **🔍 Relevance Scores** — Color-coded confidence badges (🟢 high / 🟡 mid / 🔴 low) on every source.
+- **🎯 Focus Mode** — Lock the AI's attention to a single document for precise answers.
+- **✏️ Custom System Prompt** — Tune the AI's behavior and personality from the sidebar.
+- **⚡ Quick Prompts** — One-click starter suggestions (Summarize, Key Points, Author Info, etc.).
+
+### 🎨 Experience
+- **🎨 5 Color Themes** — Midnight Purple, Ocean Blue, Emerald, Sunset, Rose Gold.
+- **📊 Analytics Dashboard** — Live stats: documents, pages, chunks, queries, avg response time, tokens.
+- **⏱️ Response Metrics** — Per-answer timing, token count, and tokens/second.
+- **🔊 Text-to-Speech** — Click "Read Aloud" to hear any answer spoken by the browser.
+- **💬 Chat Sessions** — Save, name, and switch between multiple conversations.
+- **💾 Export Chat** — Download your conversation as a Markdown file.
+
+### 🛠️ Model Management
+- **🧠 Dynamic Model Switching** — Switch between any locally installed Ollama model instantly.
+- **📥 Download Models from UI** — Pull new Ollama models directly from the sidebar.
+- **🔧 Configurable** — Tune temperature, search depth, chunk size, and more via `.env` or the UI.
 
 ---
 
