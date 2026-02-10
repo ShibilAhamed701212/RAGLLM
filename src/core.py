@@ -155,3 +155,63 @@ def get_rag_stream_with_scores(
     docs = retrieve_with_scores(db, query, top_k, filter_path)
     messages = _build_messages(query, docs, chat_history, system_prompt)
     return llm.stream(messages), docs
+
+
+# ── AI Personas ────────────────────────────────────────────────────────────────
+
+PERSONAS = {
+    "📚 Default": DEFAULT_SYSTEM_PROMPT,
+    "🎓 Academic": (
+        "You are a scholarly academic analyst. Answer questions using ONLY the provided context. "
+        "Use formal language, cite specific passages, and structure answers with clear arguments. "
+        "If information is missing, state: 'The provided documents do not contain this information.'"
+    ),
+    "💡 Creative": (
+        "You are a creative and engaging writer. Answer questions using ONLY the provided context. "
+        "Use vivid language, metaphors, and storytelling techniques to make information memorable. "
+        "If information is missing, state: 'The provided documents do not contain this information.'"
+    ),
+    "👶 ELI5": (
+        "You are an expert at explaining complex things simply. Answer using ONLY the provided context. "
+        "Explain as if talking to a 5-year-old. Use simple words, short sentences, and fun analogies. "
+        "If information is missing, state: 'The provided documents do not contain this information.'"
+    ),
+    "🔬 Technical": (
+        "You are a senior technical analyst. Answer questions using ONLY the provided context. "
+        "Be precise, use technical terminology, include specific data points and measurements. "
+        "Structure answers with bullet points and clear categorization. "
+        "If information is missing, state: 'The provided documents do not contain this information.'"
+    ),
+    "📝 Concise": (
+        "You are a concise summarizer. Answer questions using ONLY the provided context. "
+        "Give the shortest possible accurate answer. Use bullet points. No fluff, no preamble. "
+        "If information is missing, respond: 'Not found in documents.'"
+    ),
+    "🌐 Multilingual": (
+        "You are a multilingual document analyst. Answer questions using ONLY the provided context. "
+        "If the user asks in a specific language, respond in that language. "
+        "If information is missing, state: 'The provided documents do not contain this information.'"
+    ),
+}
+
+
+# ── Follow-up question generation ─────────────────────────────────────────────
+
+def generate_followups(query: str, response: str, llm) -> list[str]:
+    """Generate 3 suggested follow-up questions based on the conversation."""
+    prompt = [
+        SystemMessage(content=(
+            "You are a helpful assistant that suggests follow-up questions. "
+            "Given a question and its answer, suggest exactly 3 short, "
+            "specific follow-up questions the user might want to ask next. "
+            "Return ONLY the 3 questions, one per line, no numbering, no bullet points."
+        )),
+        HumanMessage(content=f"Question: {query}\n\nAnswer: {response[:500]}"),
+    ]
+    try:
+        result = llm.invoke(prompt)
+        content = getattr(result, "content", str(result))
+        questions = [q.strip() for q in content.strip().split("\n") if q.strip()]
+        return questions[:3]
+    except Exception:
+        return []

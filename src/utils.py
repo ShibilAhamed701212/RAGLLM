@@ -135,3 +135,26 @@ def delete_ollama_model(model_name: str) -> bool:
         return resp.status_code == 200
     except Exception:
         return False
+
+
+def semantic_search(db, query: str, top_k: int = 10, filter_path=None) -> list[dict]:
+    """Run a pure semantic search (no LLM) and return scored results."""
+    if db is None:
+        return []
+    try:
+        kwargs = {}
+        if filter_path is not None:
+            kwargs["filter"] = {"source": str(filter_path)}
+
+        results = db.similarity_search_with_relevance_scores(query, k=top_k, **kwargs)
+        return [
+            {
+                "content": doc.page_content,
+                "source": Path(doc.metadata.get("source", "Unknown")).name,
+                "page": doc.metadata.get("page", "?"),
+                "score": score,
+            }
+            for doc, score in results
+        ]
+    except Exception:
+        return []
