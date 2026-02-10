@@ -3,6 +3,7 @@ Utilities — Embedding model, LLM, FAISS index loaders, and Ollama helpers.
 """
 
 import requests
+from pathlib import Path
 
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -96,3 +97,41 @@ def load_faiss_index(embeddings) -> FAISS | None:
     except Exception as exc:
         print(f"[WARNING] Failed to load FAISS index: {exc}")
         return None
+
+
+def get_index_stats(db) -> dict:
+    """Return statistics about the loaded FAISS vector index."""
+    if db is None:
+        return {"total_chunks": 0, "unique_sources": 0, "sources": []}
+
+    try:
+        all_docs = db.docstore._dict
+        total = len(all_docs)
+        sources = set()
+        pages = set()
+        for doc in all_docs.values():
+            src = Path(doc.metadata.get("source", "Unknown")).name
+            sources.add(src)
+            page = doc.metadata.get("page", "?")
+            pages.add(f"{src}:{page}")
+        return {
+            "total_chunks": total,
+            "unique_sources": len(sources),
+            "total_pages": len(pages),
+            "sources": sorted(sources),
+        }
+    except Exception:
+        return {"total_chunks": 0, "unique_sources": 0, "sources": []}
+
+
+def delete_ollama_model(model_name: str) -> bool:
+    """Delete a locally installed Ollama model. Returns True on success."""
+    try:
+        resp = requests.delete(
+            f"{OLLAMA_BASE_URL}/api/delete",
+            json={"name": model_name},
+            timeout=30,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
