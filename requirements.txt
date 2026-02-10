@@ -1,0 +1,10 @@
+streamlit
+langchain
+langchain-community
+langchain-ollama
+langchain-openai
+langchain-text-splitters
+fastembed
+faiss-cpu
+python-dotenv
+pypdf
