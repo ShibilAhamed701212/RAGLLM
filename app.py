@@ -259,16 +259,99 @@ def _render_sources(docs: list, label: str = "📎 Sources") -> None:
             st.caption(content[:300] + "…" if len(content) > 300 else content)
 
 
+
+def _inject_tts_listener():
+    """Injects a global event listener to handle TTS clicks, bypassing React sanitization."""
+    import streamlit.components.v1 as components
+    js = """
+    <script>
+        (function() {
+            try {
+                // Target the main window (parent of the iframe)
+                const win = window.parent;
+                const doc = win.document;
+                
+                // Identify our listener with a unique ID to prevent duplicates
+                if (!doc.getElementById('tts-listener-v2')) {
+                    const marker = doc.createElement('div');
+                    marker.id = 'tts-listener-v2';
+                    marker.style.display = 'none';
+                    doc.body.appendChild(marker);
+
+                    console.log("[TTS] Injecting global listener...");
+
+                    doc.body.addEventListener('click', function(e) {
+                        // Find the closest button with data-tts attribute
+                        const btn = e.target.closest('[data-tts]');
+                        if (!btn) return;
+                        
+                        // Prevent default behavior (navigation, etc)
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        const text = btn.getAttribute('data-tts');
+                        if (!text) {
+                            console.warn("[TTS] Button clicked but no text found");
+                            return;
+                        }
+
+                        console.log("[TTS] Exploring text length:", text.length);
+
+                        // Use window.speechSynthesis from the main window context
+                        const synth = win.speechSynthesis;
+
+                        if (synth.speaking) {
+                            console.log("[TTS] Stopping speech");
+                            synth.cancel();
+                            btn.textContent = '🔊 Read Aloud';
+                        } else {
+                            console.log("[TTS] Starting speech");
+                            synth.cancel(); // Safety cancel
+                            
+                            const u = new win.SpeechSynthesisUtterance(text);
+                            u.lang = 'en-US'; 
+                            u.rate = 1.0;
+                            u.pitch = 1.0;
+                            
+                            u.onstart = () => { console.log("[TTS] Started"); btn.textContent = '⏹️ Stop'; };
+                            u.onend = () => { console.log("[TTS] Finished"); btn.textContent = '🔊 Read Aloud'; };
+                            u.onerror = (err) => { 
+                                console.error('[TTS] Error:', err); 
+                                btn.textContent = '❌ Error'; 
+                                setTimeout(() => btn.textContent = '🔊 Read Aloud', 2000);
+                            };
+                            
+                            synth.speak(u);
+                        }
+                    }, true); // Capture phase to intercept early
+                    
+                    console.log("[TTS] Listener v2 attached successfully");
+                }
+            } catch(e) {
+                console.error("[TTS] Injection failed:", e);
+            }
+        })();
+    </script>
+    """
+    components.html(js, height=0, width=0)
+
+
 def _render_action_buttons(text: str, theme_dict: dict, key_suffix: str = "") -> None:
+    # Escape for JS string literal (for Copy button)
     copy_safe = _escape_js(text)
-    tts_safe = _escape_js(text.replace("\n", " "), max_len=500)
+    
+    # Escape for HTML attribute (for TTS data attribute)
+    tts_text = text[:1500].replace("\n", " ").strip()
+    tts_safe_attr = html.escape(tts_text, quote=True)
+    
     accent = theme_dict["accent"]
+    
+    # Note: We removed the inline onclick handler to prevent React Error #231.
+    # The click is now handled by the global listener injected by _inject_tts_listener().
     st.markdown(
         f"""<div class="action-row">
             <button class="action-btn" onclick="navigator.clipboard.writeText('{copy_safe}').then(()=>this.textContent='✅ Copied!')">📋 Copy</button>
-            <button class="action-btn" onclick="
-                if(window.speechSynthesis.speaking){{window.speechSynthesis.cancel();this.textContent='🔊 Read Aloud';}}
-                else{{const u=new SpeechSynthesisUtterance('{tts_safe}');u.rate=1.0;window.speechSynthesis.speak(u);this.textContent='⏹️ Stop';}}">🔊 Read Aloud</button>
+            <button class="action-btn tts-btn" data-tts="{tts_safe_attr}">🔊 Read Aloud</button>
         </div>""",
         unsafe_allow_html=True,
     )
@@ -1470,43 +1553,167 @@ with pb5:
                     st.session_state.followups = []
                     st.rerun()
 
-        if st.session_state.history:
-            st.markdown("---")
-            exp_c1, exp_c2 = st.columns(2)
-            
-            # Markdown Export
-            lines_exp = [
-                "# Pro RAG Chat Export",
-                f"_Session: {st.session_state.active_session}_",
-                f"_Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n",
-            ]
-            for msg in st.session_state.history:
-                role = "**You**" if msg["role"] == "user" else "**AI**"
-                lines_exp.append(f"{role}: {msg['content']}\n")
-            
-            with exp_c1:
-                st.download_button(
-                    "📄 Export MD",
-                    data="\n".join(lines_exp),
-                    file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                    mime="text/markdown",
-                    use_container_width=True,
-                )
+        # Initialize session state (chat history, etc.)
+        if "history" not in st.session_state:
+            st.session_state.history = []
 
-            # PDF Export
-            with exp_c2:
+        # Inject TTS Listener for global event delegation
+        _inject_tts_listener()
+
+    # ── Theme & CSS ─────────────────────────────────────────────────────────────
+    if "theme" not in st.session_state:
+        st.session_state.theme = "Midnight Purple"
+        
+    theme_dict = THEMES.get(st.session_state.theme, THEMES["Midnight Purple"])
+    
+    CSS = f"""
+    <style>
+    /* Main Background & Font */
+    .stApp {{
+        background: {theme_dict['gradient']};
+        font-family: 'Inter', sans-serif;
+    }}
+    
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {{
+        background-color: {theme_dict['sidebar_bg']};
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }}
+    
+    /* Glassmorphism Cards */
+    .glass-card {{
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }}
+    
+    /* Chat Message Bubbles */
+    .user-msg {{
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 12px 12px 0 12px;
+        padding: 12px 16px;
+        margin: 8px 0;
+        color: #fff;
+        max-width: 85%;
+        margin-left: auto;
+    }}
+    .ai-msg {{
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 12px 12px 12px 0;
+        padding: 12px 16px;
+        margin: 8px 0;
+        color: #e0e0e0;
+        max-width: 85%;
+    }}
+    
+    /* Action Buttons (Copy/TTS) */
+    .action-row {{
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        opacity: 0.7;
+        transition: opacity 0.2s;
+    }}
+    .action-row:hover {{ opacity: 1; }}
+    
+    .action-btn {{
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #ccc;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }}
+    .action-btn:hover {{
+        background: rgba(255, 255, 255, 0.1);
+        border-color: {theme_dict['accent']};
+        color: white;
+    }}
+
+    /* Metrics Chips */
+    .perf-metrics {{
+        display: flex;
+        gap: 8px;
+        font-size: 0.7rem;
+        color: #888;
+        margin-top: 4px;
+    }}
+    .perf-chip {{
+        background: rgba(0,0,0,0.2);
+        padding: 2px 6px;
+        border-radius: 4px;
+    }}
+    
+    /* Badge Styles */
+    .score-badge {{
+        font-size: 0.75em;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-left: 6px;
+        font-weight: 600;
+    }}
+    .score-high {{ background-color: rgba(76, 175, 80, 0.2); color: #81c784; }}
+    .score-mid  {{ background-color: rgba(255, 152, 0, 0.2); color: #ffb74d; }}
+    .score-low  {{ background-color: rgba(244, 67, 54, 0.2);  color: #e57373; }}
+
+    /* Hide Streamlit default branding */
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    </style>
+    """
+
+    # Apply custom CSS
+    st.markdown(CSS, unsafe_allow_html=True)
+
+    if st.session_state.history:
+        st.markdown("---")
+        exp_c1, exp_c2 = st.columns(2)
+        
+        # Markdown Export
+        lines_exp = [
+            "# Pro RAG Chat Export",
+            f"_Session: {st.session_state.active_session}_",
+            f"_Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n",
+        ]
+        for msg in st.session_state.history:
+            role = "**You**" if msg["role"] == "user" else "**AI**"
+            lines_exp.append(f"{role}: {msg['content']}\n")
+        
+        with exp_c1:
+            st.download_button(
+                "📄 Export MD",
+                data="\n".join(lines_exp),
+                file_name=f"{st.session_state.active_session}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        # PDF Export
+        with exp_c2:
+            try:
+                # Ensure selected_model is available or fallback
+                model_name = selected_model if 'selected_model' in locals() else "Unknown Model"
                 pdf_bytes = _generate_chat_pdf(
                     st.session_state.active_session,
                     st.session_state.history,
-                    model=selected_model
+                    model=model_name
                 )
                 st.download_button(
-                    "📕 Export PDF",
+                    label="📕 Export PDF",
                     data=bytes(pdf_bytes),
-                    file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    file_name=f"{st.session_state.active_session}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                 )
+            except Exception as e:
+                st.error(f"PDF Gen Error: {e}")
 
 
 # ── Initialise resources ──────────────────────────────────────────────────────
