@@ -2,13 +2,16 @@
 Core RAG logic — retriever setup, prompt construction, and response generation.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import List, Tuple
 
 from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.config import TOP_K, SEARCH_TYPE
+
 
 # ── Default System Prompt ──────────────────────────────────────────────────────
 
@@ -57,24 +60,24 @@ def _build_messages(
     chat_history: list | None = None,
     system_prompt: str | None = None,
 ) -> list:
-    """Build a proper list of chat messages with system + human roles.
+    """Build a list of chat messages: system + history + (context + question).
 
-    Includes conversation history for multi-turn context.
+    Includes up to the last 6 conversation turns for multi-turn context.
     """
     prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
     context_block = _CONTEXT_TEMPLATE.format(context=format_docs(docs))
 
-    messages = [SystemMessage(content=prompt)]
+    messages: list = [SystemMessage(content=prompt)]
 
-    # Add recent conversation history for multi-turn context (last 6 turns)
+    # Recent conversation history (last 6 turns)
     if chat_history:
-        recent = chat_history[-6:]
-        for msg in recent:
-            if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                from langchain_core.messages import AIMessage
-                messages.append(AIMessage(content=msg["content"]))
+        for msg in chat_history[-6:]:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
 
     # Current query with context
     messages.append(HumanMessage(content=f"{context_block}\n\nQuestion: {query}"))
@@ -92,7 +95,7 @@ def get_retriever(
     filter_path=None,
 ):
     """Return a LangChain retriever, optionally filtered to a single source file."""
-    search_kwargs = {"k": top_k}
+    search_kwargs: dict = {"k": top_k}
 
     if search_type == "mmr":
         search_kwargs["fetch_k"] = fetch_k
@@ -107,38 +110,28 @@ def get_retriever(
 # ── Similarity search with scores ─────────────────────────────────────────────
 
 def retrieve_with_scores(
-    db, query: str, top_k: int = TOP_K, filter_path=None
+    db, query: str, top_k: int = TOP_K, filter_path=None,
 ) -> List[Document]:
     """Retrieve documents with similarity scores attached to metadata."""
-    kwargs = {}
+    kwargs: dict = {}
     if filter_path is not None:
         kwargs["filter"] = {"source": str(filter_path)}
 
     results = db.similarity_search_with_relevance_scores(query, k=top_k, **kwargs)
 
-    docs = []
+    docs: list[Document] = []
     for doc, score in results:
-        doc.metadata["score"] = score
+        doc.metadata["score"] = round(score, 4)
         docs.append(doc)
     return docs
 
 
 # ── Response generation ───────────────────────────────────────────────────────
 
-def get_rag_response(
-    query: str, retriever, llm,
-    chat_history=None, system_prompt=None,
-) -> Tuple:
-    """Retrieve docs → build messages → return (full_response, docs)."""
-    docs = retriever.invoke(query)
-    messages = _build_messages(query, docs, chat_history, system_prompt)
-    response = llm.invoke(messages)
-    return response, docs
-
-
 def get_rag_stream(
     query: str, retriever, llm,
-    chat_history=None, system_prompt=None,
+    chat_history: list | None = None,
+    system_prompt: str | None = None,
 ) -> Tuple:
     """Retrieve docs → build messages → return (streaming_iterator, docs)."""
     docs = retriever.invoke(query)
@@ -147,9 +140,11 @@ def get_rag_stream(
 
 
 def get_rag_stream_with_scores(
-    query: str, db, llm,
-    top_k: int = TOP_K, filter_path=None,
-    chat_history=None, system_prompt=None,
+    query: str, db, llm, *,
+    top_k: int = TOP_K,
+    filter_path=None,
+    chat_history: list | None = None,
+    system_prompt: str | None = None,
 ) -> Tuple:
     """Retrieve docs with scores → build messages → return (streaming_iterator, docs)."""
     docs = retrieve_with_scores(db, query, top_k, filter_path)
@@ -159,7 +154,7 @@ def get_rag_stream_with_scores(
 
 # ── AI Personas ────────────────────────────────────────────────────────────────
 
-PERSONAS = {
+PERSONAS: dict[str, str] = {
     "📚 Default": DEFAULT_SYSTEM_PROMPT,
     "🎓 Academic": (
         "You are a scholarly academic analyst. Answer questions using ONLY the provided context. "
@@ -199,7 +194,7 @@ PERSONAS = {
 
 def generate_followups(query: str, response: str, llm) -> list[str]:
     """Generate 3 suggested follow-up questions based on the conversation."""
-    prompt = [
+    messages = [
         SystemMessage(content=(
             "You are a helpful assistant that suggests follow-up questions. "
             "Given a question and its answer, suggest exactly 3 short, "
@@ -209,7 +204,7 @@ def generate_followups(query: str, response: str, llm) -> list[str]:
         HumanMessage(content=f"Question: {query}\n\nAnswer: {response[:500]}"),
     ]
     try:
-        result = llm.invoke(prompt)
+        result = llm.invoke(messages)
         content = getattr(result, "content", str(result))
         questions = [q.strip() for q in content.strip().split("\n") if q.strip()]
         return questions[:3]

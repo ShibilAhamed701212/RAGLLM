@@ -2,9 +2,11 @@
 Utilities — Embedding model, LLM, FAISS index loaders, and Ollama helpers.
 """
 
-import requests
+from __future__ import annotations
+
 from pathlib import Path
 
+import requests
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import ChatOllama
@@ -22,11 +24,20 @@ from src.config import (
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 
+_EMPTY_STATS: dict = {
+    "total_chunks": 0,
+    "unique_sources": 0,
+    "total_pages": 0,
+    "sources": [],
+}
+
+
+# ── Ollama helpers ─────────────────────────────────────────────────────────────
 
 def list_ollama_models() -> list[dict]:
     """Query the local Ollama server for all installed models.
 
-    Returns a list of dicts with 'name' and 'size' keys, sorted by size.
+    Returns a list of dicts with 'name' and 'size_gb' keys, sorted by size.
     Falls back to a single default entry if the server is unreachable.
     """
     try:
@@ -55,73 +66,11 @@ def pull_ollama_model(model_name: str) -> bool:
             stream=True,
         )
         resp.raise_for_status()
-        # Consume the stream to complete the download
         for _ in resp.iter_lines():
             pass
         return True
     except Exception:
         return False
-
-
-def get_embeddings() -> FastEmbedEmbeddings:
-    """Return a FastEmbed embedding model (CPU-optimised, no PyTorch needed)."""
-    return FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
-
-
-def get_llm(temperature: float = DEFAULT_TEMPERATURE, model: str | None = None):
-    """Return the configured LLM (Ollama local or OpenAI cloud).
-
-    Args:
-        temperature: Sampling temperature.
-        model: Override the default Ollama model name. Ignored for OpenAI.
-    """
-    if LLM_PROVIDER == "openai":
-        if not OPENAI_API_KEY:
-            raise ValueError(
-                "LLM_PROVIDER is 'openai' but OPENAI_API_KEY is not set. "
-                "Add it to your .env file."
-            )
-        return ChatOpenAI(model=OPENAI_MODEL, temperature=temperature)
-    return ChatOllama(model=model or LLM_MODEL, temperature=temperature)
-
-
-def load_faiss_index(embeddings) -> FAISS | None:
-    """Load a saved FAISS index from disk, or return None if it doesn't exist."""
-    index_file = VECTOR_DIR / "index.faiss"
-    if not index_file.exists():
-        return None
-    try:
-        return FAISS.load_local(
-            str(VECTOR_DIR), embeddings, allow_dangerous_deserialization=True
-        )
-    except Exception as exc:
-        print(f"[WARNING] Failed to load FAISS index: {exc}")
-        return None
-
-
-def get_index_stats(db) -> dict:
-    """Return statistics about the loaded FAISS vector index."""
-    if db is None:
-        return {"total_chunks": 0, "unique_sources": 0, "sources": []}
-
-    try:
-        all_docs = db.docstore._dict
-        total = len(all_docs)
-        sources = set()
-        pages = set()
-        for doc in all_docs.values():
-            src = Path(doc.metadata.get("source", "Unknown")).name
-            sources.add(src)
-            page = doc.metadata.get("page", "?")
-            pages.add(f"{src}:{page}")
-        return {
-            "total_chunks": total,
-            "unique_sources": len(sources),
-            "total_pages": len(pages),
-            "sources": sorted(sources),
-        }
-    except Exception:
-        return {"total_chunks": 0, "unique_sources": 0, "sources": []}
 
 
 def delete_ollama_model(model_name: str) -> bool:
@@ -137,12 +86,96 @@ def delete_ollama_model(model_name: str) -> bool:
         return False
 
 
-def semantic_search(db, query: str, top_k: int = 10, filter_path=None) -> list[dict]:
+# ── Core loaders ───────────────────────────────────────────────────────────────
+
+def get_embeddings() -> FastEmbedEmbeddings:
+    """Return a FastEmbed embedding model (CPU-optimised, no PyTorch needed)."""
+    return FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+
+
+def get_llm(
+    temperature: float = DEFAULT_TEMPERATURE,
+    model: str | None = None,
+    api_key: str | None = None,
+):
+    """Return the configured LLM (Ollama local or OpenAI cloud).
+
+    Args:
+        temperature: Sampling temperature.
+        model: Model name (e.g. 'gpt-4', 'llama3'). Auto-detects provider.
+        api_key: Optional API key for cloud providers.
+    """
+    model = model or LLM_MODEL
+    
+    # Check if it's an OpenAI model
+    if model.startswith(("gpt-", "o1-")):
+        if not api_key:
+            # Fallback to env var or raise
+            if not OPENAI_API_KEY:
+                raise ValueError("OpenAI API Key is missing. Enter it in the sidebar.")
+            api_key = OPENAI_API_KEY
+            
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key
+        )
+        
+    # Default to Ollama
+    return ChatOllama(model=model, temperature=temperature)
+
+
+def load_faiss_index(embeddings) -> FAISS | None:
+    """Load a saved FAISS index from disk, or return None if it doesn't exist."""
+    index_file = VECTOR_DIR / "index.faiss"
+    if not index_file.exists():
+        return None
+    try:
+        return FAISS.load_local(
+            str(VECTOR_DIR), embeddings, allow_dangerous_deserialization=True,
+        )
+    except Exception as exc:
+        print(f"[WARNING] Failed to load FAISS index: {exc}")
+        return None
+
+
+# ── Analytics ──────────────────────────────────────────────────────────────────
+
+def get_index_stats(db) -> dict:
+    """Return statistics about the loaded FAISS vector index."""
+    if db is None:
+        return dict(_EMPTY_STATS)
+
+    try:
+        all_docs = db.docstore._dict
+        total = len(all_docs)
+        sources: set[str] = set()
+        pages: set[str] = set()
+        for doc in all_docs.values():
+            src = Path(doc.metadata.get("source", "Unknown")).name
+            sources.add(src)
+            page = doc.metadata.get("page", "?")
+            pages.add(f"{src}:{page}")
+        return {
+            "total_chunks": total,
+            "unique_sources": len(sources),
+            "total_pages": len(pages),
+            "sources": sorted(sources),
+        }
+    except Exception:
+        return dict(_EMPTY_STATS)
+
+
+# ── Semantic search ────────────────────────────────────────────────────────────
+
+def semantic_search(
+    db, query: str, top_k: int = 10, filter_path=None,
+) -> list[dict]:
     """Run a pure semantic search (no LLM) and return scored results."""
     if db is None:
         return []
     try:
-        kwargs = {}
+        kwargs: dict = {}
         if filter_path is not None:
             kwargs["filter"] = {"source": str(filter_path)}
 
@@ -152,7 +185,7 @@ def semantic_search(db, query: str, top_k: int = 10, filter_path=None) -> list[d
                 "content": doc.page_content,
                 "source": Path(doc.metadata.get("source", "Unknown")).name,
                 "page": doc.metadata.get("page", "?"),
-                "score": score,
+                "score": round(score, 4),
             }
             for doc, score in results
         ]

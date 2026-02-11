@@ -2,6 +2,10 @@
 Pro RAG Chatbot — Streamlit interface for chatting with your documents.
 """
 
+from __future__ import annotations
+
+import html
+import io
 import json
 import shutil
 import time
@@ -9,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.config import (
     DATA_DIR,
@@ -19,69 +24,119 @@ from src.config import (
     CHUNK_OVERLAP,
     LLM_MODEL,
 )
+import importlib
+import src.utils
+importlib.reload(src.utils)
+
 from src.utils import (
-    get_embeddings, get_llm, load_faiss_index,
-    list_ollama_models, pull_ollama_model, delete_ollama_model,
-    get_index_stats, semantic_search,
+    get_embeddings,
+    get_llm,
+    load_faiss_index,
+    list_ollama_models,
+    pull_ollama_model,
+    get_index_stats,
+    semantic_search,
 )
 from src.ingestion import ingest_all, ingest_url
 from src.core import (
-    get_retriever, get_rag_stream_with_scores,
-    DEFAULT_SYSTEM_PROMPT, PERSONAS, generate_followups,
+    get_rag_stream_with_scores,
+    DEFAULT_SYSTEM_PROMPT,
+    PERSONAS,
+    generate_followups,
 )
+
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Pro RAG Chatbot", page_icon="🤖", layout="wide")
 
-# ── Theme definitions ─────────────────────────────────────────────────────────
 
-THEMES = {
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+THEMES: dict[str, dict[str, str]] = {
     "Midnight Purple": {
         "gradient": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        "sidebar_bg": "linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 100%)",
-        "card_bg": "linear-gradient(135deg, #1a1a2e, #16213e)",
-        "accent": "#667eea",
-        "accent2": "#764ba2",
-        "border": "rgba(102, 126, 234, 0.3)",
+        "sidebar_bg": "#0d0d1a",
+        "sidebar_bg2": "#12122a",
+        "card_bg": "rgba(22, 22, 48, 0.7)",
+        "card_solid": "#16163a",
+        "accent": "#7c8cf8",
+        "accent2": "#a78bfa",
+        "accent_glow": "rgba(124, 140, 248, 0.15)",
+        "border": "rgba(124, 140, 248, 0.15)",
+        "text_primary": "#e8e8f0",
+        "text_secondary": "#9191b8",
+        "text_muted": "#6060a0",
+        "hover_bg": "rgba(124, 140, 248, 0.08)",
+        "danger": "#ef4444",
     },
     "Ocean Blue": {
-        "gradient": "linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)",
-        "sidebar_bg": "linear-gradient(180deg, #0c1222 0%, #0f172a 100%)",
-        "card_bg": "linear-gradient(135deg, #0f172a, #1e293b)",
-        "accent": "#0ea5e9",
-        "accent2": "#2563eb",
-        "border": "rgba(14, 165, 233, 0.3)",
+        "gradient": "linear-gradient(135deg, #38bdf8 0%, #3b82f6 100%)",
+        "sidebar_bg": "#080e1c",
+        "sidebar_bg2": "#0c1428",
+        "card_bg": "rgba(14, 26, 50, 0.7)",
+        "card_solid": "#0e1a32",
+        "accent": "#38bdf8",
+        "accent2": "#60a5fa",
+        "accent_glow": "rgba(56, 189, 248, 0.15)",
+        "border": "rgba(56, 189, 248, 0.15)",
+        "text_primary": "#e2ecf5",
+        "text_secondary": "#7ea8cc",
+        "text_muted": "#4a7da8",
+        "hover_bg": "rgba(56, 189, 248, 0.08)",
+        "danger": "#ef4444",
     },
     "Emerald": {
-        "gradient": "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-        "sidebar_bg": "linear-gradient(180deg, #071a12 0%, #0d2818 100%)",
-        "card_bg": "linear-gradient(135deg, #0d2818, #14412e)",
-        "accent": "#10b981",
-        "accent2": "#059669",
-        "border": "rgba(16, 185, 129, 0.3)",
+        "gradient": "linear-gradient(135deg, #34d399 0%, #10b981 100%)",
+        "sidebar_bg": "#06120d",
+        "sidebar_bg2": "#0a1f16",
+        "card_bg": "rgba(10, 34, 24, 0.7)",
+        "card_solid": "#0a2218",
+        "accent": "#34d399",
+        "accent2": "#6ee7b7",
+        "accent_glow": "rgba(52, 211, 153, 0.15)",
+        "border": "rgba(52, 211, 153, 0.15)",
+        "text_primary": "#e2f5ec",
+        "text_secondary": "#7eccaa",
+        "text_muted": "#4aa880",
+        "hover_bg": "rgba(52, 211, 153, 0.08)",
+        "danger": "#ef4444",
     },
     "Sunset": {
-        "gradient": "linear-gradient(135deg, #f97316 0%, #ef4444 100%)",
-        "sidebar_bg": "linear-gradient(180deg, #1a0f08 0%, #2a1510 100%)",
-        "card_bg": "linear-gradient(135deg, #2a1510, #3d1c16)",
-        "accent": "#f97316",
-        "accent2": "#ef4444",
-        "border": "rgba(249, 115, 22, 0.3)",
+        "gradient": "linear-gradient(135deg, #fb923c 0%, #f43f5e 100%)",
+        "sidebar_bg": "#140a06",
+        "sidebar_bg2": "#1f100a",
+        "card_bg": "rgba(34, 16, 10, 0.7)",
+        "card_solid": "#22100a",
+        "accent": "#fb923c",
+        "accent2": "#f97316",
+        "accent_glow": "rgba(251, 146, 60, 0.15)",
+        "border": "rgba(251, 146, 60, 0.15)",
+        "text_primary": "#f5ece2",
+        "text_secondary": "#ccaa7e",
+        "text_muted": "#a8804a",
+        "hover_bg": "rgba(251, 146, 60, 0.08)",
+        "danger": "#ef4444",
     },
     "Rose Gold": {
-        "gradient": "linear-gradient(135deg, #f43f5e 0%, #ec4899 100%)",
-        "sidebar_bg": "linear-gradient(180deg, #1a0a12 0%, #2a1020 100%)",
-        "card_bg": "linear-gradient(135deg, #2a1020, #3d1830)",
-        "accent": "#f43f5e",
-        "accent2": "#ec4899",
-        "border": "rgba(244, 63, 94, 0.3)",
+        "gradient": "linear-gradient(135deg, #fb7185 0%, #e879f9 100%)",
+        "sidebar_bg": "#140810",
+        "sidebar_bg2": "#1f0c1a",
+        "card_bg": "rgba(34, 12, 26, 0.7)",
+        "card_solid": "#220c1a",
+        "accent": "#fb7185",
+        "accent2": "#f0abfc",
+        "accent_glow": "rgba(251, 113, 133, 0.15)",
+        "border": "rgba(251, 113, 133, 0.15)",
+        "text_primary": "#f5e2ec",
+        "text_secondary": "#cc7eaa",
+        "text_muted": "#a84a80",
+        "hover_bg": "rgba(251, 113, 133, 0.08)",
+        "danger": "#ef4444",
     },
 }
 
-# ── Multi-language ────────────────────────────────────────────────────────────
-
-LANGUAGES = {
+LANGUAGES: dict[str, str] = {
     "🇬🇧 English": "",
     "🇪🇸 Spanish": "Respond entirely in Spanish.",
     "🇫🇷 French": "Respond entirely in French.",
@@ -94,10 +149,23 @@ LANGUAGES = {
     "🇰🇷 Korean": "Respond entirely in Korean.",
 }
 
+QUICK_PROMPTS: list[tuple[str, str]] = [
+    ("📋 Summarize", "Provide a detailed summary of the document."),
+    ("🔑 Key Points", "What are the key points and main takeaways?"),
+    ("❓ What is this?", "What is this document about? Give an overview."),
+    ("👤 Author Info", "Who is the author and what are their credentials?"),
+    ("📊 Main Topics", "List all the main topics covered in this document."),
+    ("💡 Key Insights", "What are the most interesting insights from this document?"),
+    ("📖 Chapter List", "List all chapters or sections in this document."),
+    ("🎯 Conclusions", "What are the main conclusions or recommendations?"),
+]
+
+SESSIONS_FILE = VECTOR_DIR.parent / ".chat_sessions.json"
+
 
 # ── Session state defaults ────────────────────────────────────────────────────
 
-DEFAULTS = {
+_DEFAULTS: dict = {
     "history": [],
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
     "response_count": 0,
@@ -110,153 +178,1011 @@ DEFAULTS = {
     "language": "🇬🇧 English",
     "followups": [],
     "show_shortcuts": False,
+    "doc_summaries": {},
+    "openai_key": "",
 }
 
-for key, val in DEFAULTS.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
-
-# Load saved sessions from disk
-SESSIONS_FILE = Path(VECTOR_DIR).parent / ".chat_sessions.json"
+for _key, _val in _DEFAULTS.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _val
 
 
-def _load_sessions():
-    if SESSIONS_FILE.exists():
-        try:
-            data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
-            st.session_state.saved_sessions = data
-        except Exception:
-            pass
+# ── Session persistence ───────────────────────────────────────────────────────
 
-
-def _save_sessions():
+def _load_sessions() -> None:
+    if not SESSIONS_FILE.exists():
+        return
     try:
-        clean = {}
+        data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            st.session_state.saved_sessions = data
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
+def _save_sessions() -> None:
+    try:
+        clean: dict[str, list] = {}
         for name, hist in st.session_state.saved_sessions.items():
             clean[name] = [
                 {"role": m["role"], "content": m["content"]}
                 for m in hist
+                if isinstance(m, dict) and "role" in m and "content" in m
             ]
         SESSIONS_FILE.write_text(json.dumps(clean, indent=2), encoding="utf-8")
-    except Exception:
+    except (OSError, TypeError):
         pass
 
 
 _load_sessions()
 
 
-# ── Dynamic CSS with theme ────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-theme = THEMES[st.session_state.theme]
+def _escape_js(text: str, max_len: int = 1000) -> str:
+    return (
+        text[:max_len]
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "")
+        .replace("<", "\\x3c")
+        .replace(">", "\\x3e")
+    )
+
+
+def _build_effective_prompt() -> str:
+    base = PERSONAS.get(st.session_state.persona, DEFAULT_SYSTEM_PROMPT)
+    lang_instruction = LANGUAGES.get(st.session_state.language, "")
+    if lang_instruction:
+        base += f"\n\nIMPORTANT: {lang_instruction}"
+    return base
+
+
+def _render_sources(docs: list, label: str = "📎 Sources") -> None:
+    with st.expander(f"{label} ({len(docs)} chunks)"):
+        for doc in docs:
+            source = Path(doc.metadata.get("source", "Unknown")).name
+            page = doc.metadata.get("page", "?")
+            score = doc.metadata.get("score")
+            if score is not None:
+                cls = "score-high" if score >= 0.7 else ("score-mid" if score >= 0.4 else "score-low")
+                st.markdown(
+                    f'**{html.escape(source)}** (p.{page}) '
+                    f'<span class="score-badge {cls}">{score:.0%}</span>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.write(f"- **{source}** (p.{page})")
+            content = doc.page_content
+            st.caption(content[:300] + "…" if len(content) > 300 else content)
+
+
+def _render_action_buttons(text: str, theme_dict: dict, key_suffix: str = "") -> None:
+    copy_safe = _escape_js(text)
+    tts_safe = _escape_js(text.replace("\n", " "), max_len=500)
+    accent = theme_dict["accent"]
+    st.markdown(
+        f"""<div class="action-row">
+            <button class="action-btn" onclick="navigator.clipboard.writeText('{copy_safe}').then(()=>this.textContent='✅ Copied!')">📋 Copy</button>
+            <button class="action-btn" onclick="
+                if(window.speechSynthesis.speaking){{window.speechSynthesis.cancel();this.textContent='🔊 Read Aloud';}}
+                else{{const u=new SpeechSynthesisUtterance('{tts_safe}');u.rate=1.0;window.speechSynthesis.speak(u);this.textContent='⏹️ Stop';}}">🔊 Read Aloud</button>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_metrics(resp_time: float, resp_tokens: int) -> None:
+    if not resp_time and not resp_tokens:
+        return
+    tps = resp_tokens / resp_time if resp_time > 0 else 0
+    st.markdown(
+        f'<div class="perf-metrics">'
+        f'<span class="perf-chip">⏱️ {resp_time:.1f}s</span>'
+        f'<span class="perf-chip">📝 {resp_tokens} tok</span>'
+        f'<span class="perf-chip">⚡ {tps:.1f} t/s</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _reset_chat_state() -> None:
+    st.session_state.history = []
+    st.session_state.response_count = 0
+    st.session_state.total_tokens = 0
+    st.session_state.total_time = 0.0
+    st.session_state.followups = []
+
+
+def _generate_chat_pdf(session_name: str, history: list, model: str = "") -> bytes:
+    """Generate a professional PDF export of the chat history."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # ── Header ──
+    pdf.set_fill_color(88, 28, 135)  # Purple
+    pdf.rect(0, 0, 210, 35, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_y(8)
+    pdf.cell(0, 10, "Pro RAG Intelligence", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 6, "Immersive Intelligence Engine  |  Chat Export", ln=True, align="C")
+
+    # ── Metadata ──
+    pdf.set_y(42)
+    pdf.set_text_color(80, 80, 80)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 5, f"Session: {session_name}    |    Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}    |    Model: {model}", ln=True, align="C")
+    pdf.cell(0, 5, f"Messages: {len(history)}    |    AI Responses: {sum(1 for m in history if m['role'] == 'assistant')}", ln=True, align="C")
+    pdf.ln(8)
+
+    # ── Separator ──
+    pdf.set_draw_color(88, 28, 135)
+    pdf.set_line_width(0.5)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(6)
+
+    # ── Messages ──
+    for i, msg in enumerate(history):
+        is_user = msg["role"] == "user"
+
+        # Role label
+        if is_user:
+            pdf.set_fill_color(240, 237, 255)
+            pdf.set_text_color(88, 28, 135)
+            label = "YOU"
+        else:
+            pdf.set_fill_color(237, 247, 237)
+            pdf.set_text_color(22, 101, 52)
+            label = "AI ASSISTANT"
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(28, 5, f"  {label}", fill=True, ln=True)
+        pdf.ln(1)
+
+        # Content
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font("Helvetica", "", 10)
+        content = msg["content"]
+        # Clean content for PDF (remove markdown formatting)
+        content = content.replace("**", "").replace("*", "").replace("`", "")
+        # Encode to latin-1 safe
+        content = content.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 5.5, content)
+
+        # Performance metrics for AI messages
+        if not is_user and msg.get("time"):
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.set_text_color(130, 130, 130)
+            tokens = msg.get("tokens", 0)
+            tps = tokens / msg["time"] if msg["time"] > 0 else 0
+            pdf.cell(0, 4, f"    {msg['time']:.1f}s  |  {tokens} tokens  |  {tps:.1f} t/s", ln=True)
+
+        pdf.ln(4)
+
+        # Separator between messages
+        if i < len(history) - 1:
+            pdf.set_draw_color(220, 220, 220)
+            pdf.set_line_width(0.2)
+            pdf.line(20, pdf.get_y(), 190, pdf.get_y())
+            pdf.ln(4)
+
+    # ── Footer ──
+    pdf.set_y(-15)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 5, f"Generated by Pro RAG Intelligence  |  {datetime.now().strftime('%Y-%m-%d %H:%M')}", align="C")
+
+    return pdf.output()
+
+
+# ── Premium CSS ────────────────────────────────────────────────────────────────
+
+t = THEMES[st.session_state.theme]
+
+st.markdown('<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">', unsafe_allow_html=True)
 
 st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    /* ── Fonts ──────────────────────────────────────────── */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
     html, body, [class*="css"] {{ font-family: 'Inter', sans-serif !important; }}
 
-    .main-header {{
-        background: {theme['gradient']};
-        padding: 1.5rem 2rem;
-        border-radius: 12px;
-        margin-bottom: 1rem;
-        color: white;
+    /* ── Animated Background ─────────────────────────────── */
+    .stApp {{
+        background: #050510 !important;
+        overflow-x: hidden;
+    }}
+    .bg-mesh {{
+        position: fixed;
+        top: -50%; left: -50%;
+        width: 200%; height: 200%;
+        background:
+            radial-gradient(ellipse at 20% 50%, {t['accent']}25 0%, transparent 50%),
+            radial-gradient(ellipse at 80% 20%, {t['accent2']}20 0%, transparent 40%),
+            radial-gradient(ellipse at 50% 80%, {t['accent']}15 0%, transparent 45%);
+        animation: bgDrift 20s ease-in-out infinite alternate;
+        pointer-events: none;
+        z-index: 0;
+    }}
+    @keyframes bgDrift {{
+        0%   {{ transform: translate(0, 0) rotate(0deg); }}
+        100% {{ transform: translate(-3%, 2%) rotate(3deg); }}
+    }}
+    .bg-orb {{
+        position: fixed;
+        top: 10%; right: 5%;
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, {t['accent']}35 0%, transparent 70%);
+        border-radius: 50%;
+        filter: blur(80px);
+        animation: orb1 15s ease-in-out infinite alternate;
+        pointer-events: none;
+        z-index: 0;
+    }}
+    .bg-orb2 {{
+        position: fixed;
+        bottom: 5%; left: 10%;
+        width: 300px; height: 300px;
+        background: radial-gradient(circle, {t['accent2']}25 0%, transparent 70%);
+        border-radius: 50%;
+        filter: blur(70px);
+        animation: orb2 18s ease-in-out infinite alternate;
+        pointer-events: none;
+        z-index: 0;
+    }}
+    @keyframes orb1 {{
+        0%   {{ transform: translate(0, 0) scale(1); opacity: 0.7; }}
+        50%  {{ transform: translate(-80px, 60px) scale(1.3); opacity: 0.4; }}
+        100% {{ transform: translate(40px, -30px) scale(0.9); opacity: 0.6; }}
+    }}
+    @keyframes orb2 {{
+        0%   {{ transform: translate(0, 0) scale(1); opacity: 0.5; }}
+        50%  {{ transform: translate(60px, -40px) scale(1.1); opacity: 0.3; }}
+        100% {{ transform: translate(-30px, 50px) scale(0.85); opacity: 0.6; }}
+    }}
+    .block-container {{
+        padding-top: 0.8rem !important;
+        position: relative;
+        z-index: 1;
+    }}
+
+    /* ── Sidebar ─────────────────────────────────────────── */
+    [data-testid="stSidebar"] > div:first-child {{
+        background: linear-gradient(195deg, {t['sidebar_bg']} 0%, #050510 50%, {t['sidebar_bg2']} 100%) !important;
+        border-right: 1px solid {t['border']};
+        box-shadow: 4px 0 40px rgba(0,0,0,0.5);
+        overflow-x: hidden !important;
+    }}
+    [data-testid="stSidebar"] {{
+        overflow-x: hidden !important;
+    }}
+    [data-testid="stSidebar"] * {{
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    [data-testid="stSidebar"] .block-container,
+    [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
+        overflow-x: hidden !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {{
+        overflow-x: hidden !important;
+        word-break: break-word;
+    }}
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {{
+        color: {t['text_secondary']};
+        overflow-wrap: break-word;
+        word-break: break-word;
+    }}
+
+    .sb-brand {{
+        padding: 0rem 0 1.5rem 0;
+        margin-bottom: 0.5rem;
+        border-bottom: 1px solid {t['border']};
         position: relative;
         overflow: hidden;
     }}
-    .main-header::before {{
+    .sb-brand::after {{
         content: '';
         position: absolute;
-        top: -50%;
-        right: -20%;
-        width: 200px;
-        height: 200px;
+        bottom: -1px; left: 0; right: 0;
+        height: 1px;
+        background: {t['gradient']};
+        opacity: 0.5;
+    }}
+    .sb-brand-name {{
+        font-size: 1.5rem;
+        font-weight: 900;
+        letter-spacing: -0.5px;
+        background: {t['gradient']};
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }}
+    .sb-brand-tag {{
+        font-size: 0.6rem;
+        font-weight: 500;
+        color: {t['text_muted']};
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }}
+
+    /* Sidebar sections */
+    .sb-label {{
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.6rem;
+        font-weight: 700;
+        color: {t['accent']};
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        margin: 1.4rem 0 0.5rem 0;
+    }}
+    .sb-label::after {{
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: linear-gradient(90deg, {t['accent']}40, transparent);
+    }}
+
+    /* File list */
+    .doc-item {{
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0.45rem 0.65rem;
+        margin-bottom: 0.25rem;
+        border-radius: 8px;
+        background: {t['hover_bg']};
+        border: 1px solid transparent;
+        transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        font-size: 0.78rem;
+        color: {t['text_primary']};
+        overflow: hidden;
+        max-width: 100%;
+    }}
+    .doc-item:hover {{
+        border-color: {t['accent']}30;
+        background: {t['accent_glow']};
+        transform: translateX(4px);
+        box-shadow: -3px 0 0 {t['accent']};
+    }}
+    .doc-name {{
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+        flex: 1;
+    }}
+    .doc-icon {{
+        width: 30px; height: 30px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, {t['accent']}20, {t['accent2']}15);
+        border: 1px solid {t['accent']}20;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }}
+    .doc-meta {{
+        margin-left: auto;
+        font-size: 0.65rem;
+        color: {t['text_muted']};
+        white-space: nowrap;
+        flex-shrink: 0;
+    }}
+
+    /* ── Top Bar (popover buttons) ────────────────────────── */
+    [data-testid="stPopover"] > button {{
+        background: linear-gradient(135deg, {t['hover_bg']}, rgba(255,255,255,0.02)) !important;
+        border: 1px solid {t['border']} !important;
+        border-radius: 12px !important;
+        padding: 0.35rem 0.85rem !important;
+        font-size: 0.72rem !important;
+        font-weight: 600 !important;
+        color: {t['text_secondary']} !important;
+        transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+        min-height: 36px !important;
+        backdrop-filter: blur(10px) !important;
+        position: relative !important;
+        overflow: hidden !important;
+    }}
+    [data-testid="stPopover"] > button:hover {{
+        border-color: {t['accent']}50 !important;
+        color: {t['accent']} !important;
+        box-shadow: 0 4px 20px {t['accent']}20, 0 0 30px {t['accent']}08 !important;
+        transform: translateY(-2px) !important;
+    }}
+    [data-testid="stPopover"] [data-testid="stPopoverBody"] {{
+        background: {t['card_solid']} !important;
+        border: 1px solid {t['accent']}25 !important;
+        border-radius: 14px !important;
+        backdrop-filter: blur(24px) !important;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 40px {t['accent']}10 !important;
+    }}
+
+    /* ── Hero Banner (3D) ────────────────────────────── */
+    .hero {{
+        background: {t['gradient']};
+        padding: 2rem 2.5rem;
+        border-radius: 20px;
+        margin-bottom: 1.2rem;
+        position: relative;
+        overflow: hidden;
+        box-shadow:
+            0 20px 60px {t['accent']}20,
+            inset 0 -1px 0 rgba(255,255,255,0.1);
+        transform: perspective(800px) rotateX(1deg);
+        transition: transform 0.5s ease;
+    }}
+    .hero:hover {{
+        transform: perspective(800px) rotateX(0deg);
+    }}
+    .hero::before {{
+        content: '';
+        position: absolute;
+        top: -100px; right: -80px;
+        width: 300px; height: 300px;
         background: rgba(255,255,255,0.08);
         border-radius: 50%;
+        animation: heroFloat 8s ease-in-out infinite;
     }}
-    .main-header h1 {{ color: white !important; margin: 0; font-size: 2rem; font-weight: 700; }}
-    .main-header p {{ color: rgba(255,255,255,0.85); margin: 0.3rem 0 0 0; font-size: 0.95rem; }}
-    .model-badge {{
-        display: inline-flex; align-items: center; gap: 6px;
-        background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);
-        padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.85rem;
-        color: white; margin-top: 0.5rem; border: 1px solid rgba(255,255,255,0.2);
+    .hero::after {{
+        content: '';
+        position: absolute;
+        bottom: -120px; left: 20%;
+        width: 400px; height: 400px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+        animation: heroFloat 12s ease-in-out infinite reverse;
     }}
-    .stats-row {{ display: flex; gap: 0.8rem; margin-bottom: 1rem; }}
-    .stat-card {{
-        flex: 1;
-        background: {theme['card_bg']};
-        padding: 1rem; border-radius: 10px; text-align: center;
-        border: 1px solid {theme['border']};
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    @keyframes heroFloat {{
+        0%, 100% {{ transform: translate(0, 0); }}
+        50%  {{ transform: translate(20px, -15px); }}
     }}
-    .stat-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
-    .stat-card .stat-value {{
-        font-size: 1.8rem; font-weight: 700;
-        background: {theme['gradient']};
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    .hero h1 {{
+        color: #fff !important;
+        font-size: 2rem;
+        font-weight: 900;
+        margin: 0;
+        letter-spacing: -1px;
+        position: relative;
+        z-index: 1;
+        text-shadow: 0 2px 20px rgba(0,0,0,0.3);
     }}
-    .stat-card .stat-label {{
-        font-size: 0.75rem; color: #888;
-        text-transform: uppercase; letter-spacing: 1px; margin-top: 0.2rem;
+    .hero p {{
+        color: rgba(255,255,255,0.8);
+        font-size: 0.9rem;
+        margin: 0.3rem 0 0 0;
+        font-weight: 400;
+        position: relative;
+        z-index: 1;
     }}
-    .score-badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; margin-left: 6px; }}
-    .score-high {{ background: #1a472a; color: #4ade80; }}
-    .score-mid  {{ background: #422006; color: #fbbf24; }}
-    .score-low  {{ background: #450a0a; color: #f87171; }}
-    [data-testid="stSidebar"] > div:first-child {{ background: {theme['sidebar_bg']}; }}
-    .stChatMessage {{ animation: fadeIn 0.3s ease-in; }}
-    @keyframes fadeIn {{
-        from {{ opacity: 0; transform: translateY(8px); }}
-        to {{ opacity: 1; transform: translateY(0); }}
+    .hero-badge {{
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255,255,255,0.12);
+        backdrop-filter: blur(12px);
+        padding: 0.3rem 0.85rem;
+        border-radius: 100px;
+        font-size: 0.78rem;
+        color: rgba(255,255,255,0.95);
+        margin-top: 0.65rem;
+        border: 1px solid rgba(255,255,255,0.15);
+        font-weight: 500;
+        position: relative;
+        z-index: 1;
     }}
-    .focus-indicator {{
-        background: linear-gradient(135deg, #f59e0b22, #f59e0b11);
-        border: 1px solid #f59e0b44; border-radius: 8px;
-        padding: 0.5rem 1rem; font-size: 0.85rem; color: #f59e0b; margin-bottom: 0.5rem;
+
+    /* ── KPI Cards (3D float) ───────────────────────── */
+    .kpi-row {{
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 0.75rem;
+        margin-bottom: 1.2rem;
+        perspective: 1000px;
     }}
-    .response-metrics {{
-        display: flex; gap: 1rem; padding: 0.4rem 0; font-size: 0.75rem; color: #666;
+    @media (max-width: 768px) {{
+        .kpi-row {{ grid-template-columns: repeat(3, 1fr); }}
     }}
-    .metric-item {{ display: flex; align-items: center; gap: 4px; }}
-    .session-badge {{
-        background: {theme['card_bg']}; border: 1px solid {theme['border']};
-        border-radius: 8px; padding: 0.3rem 0.7rem; font-size: 0.8rem;
-        color: {theme['accent']}; display: inline-block; margin-top: 0.3rem;
+    .kpi {{
+        background: {t['card_bg']};
+        backdrop-filter: blur(16px);
+        border: 1px solid {t['border']};
+        border-radius: 14px;
+        padding: 1rem 0.8rem;
+        text-align: center;
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        position: relative;
+        overflow: hidden;
+        transform-style: preserve-3d;
     }}
-    .followup-btn {{
-        display: inline-block; padding: 0.35rem 0.85rem; margin: 0.2rem;
-        border-radius: 20px; background: {theme['card_bg']};
-        border: 1px solid {theme['border']}; color: {theme['accent']};
-        font-size: 0.8rem; cursor: pointer; transition: all 0.2s ease;
-        text-decoration: none;
+    .kpi::before {{
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 2px;
+        background: {t['gradient']};
+        opacity: 0;
+        transition: opacity 0.25s ease;
     }}
-    .followup-btn:hover {{ background: {theme['gradient']}; color: white; border-color: transparent; }}
-    .search-result {{
-        background: {theme['card_bg']}; border: 1px solid {theme['border']};
-        border-radius: 10px; padding: 1rem; margin-bottom: 0.8rem;
-        transition: transform 0.2s ease;
+    .kpi:hover {{
+        transform: translateY(-8px) perspective(600px) rotateX(3deg) scale(1.02);
+        box-shadow:
+            0 20px 50px {t['accent']}25,
+            0 0 30px {t['accent']}10;
+        border-color: {t['accent']}50;
     }}
-    .search-result:hover {{ transform: translateY(-2px); }}
-    .search-result-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }}
-    .copy-btn {{
-        background: none; border: 1px solid #555; border-radius: 6px;
-        padding: 4px 10px; color: #aaa; cursor: pointer; font-size: 0.75rem;
-        transition: all 0.2s;
+    .kpi:hover::before {{ opacity: 1; }}
+    .kpi-val {{
+        font-size: 1.8rem;
+        font-weight: 900;
+        background: {t['gradient']};
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        line-height: 1.2;
     }}
-    .copy-btn:hover {{ border-color: {theme['accent']}; color: {theme['accent']}; }}
-    .action-row {{ display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.3rem; }}
-    .shortcut-modal {{
-        background: {theme['card_bg']}; border: 1px solid {theme['border']};
-        border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;
+    .kpi-lbl {{
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: {t['text_muted']};
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-top: 0.3rem;
     }}
-    .shortcut-modal h3 {{ color: {theme['accent']}; margin: 0 0 1rem 0; }}
-    .shortcut-row {{ display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); }}
-    .shortcut-key {{
-        background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 4px;
-        font-family: monospace; font-size: 0.85rem; color: {theme['accent']};
+
+    /* ── Focus Indicator ─────────────────────────────────── */
+    .focus-bar {{
+        background: linear-gradient(135deg, rgba(251,191,36,0.08), rgba(251,191,36,0.04));
+        border: 1px solid rgba(251,191,36,0.25);
+        border-radius: 10px;
+        padding: 0.55rem 1rem;
+        font-size: 0.82rem;
+        color: #fbbf24;
+        margin-bottom: 0.7rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }}
+
+    /* ── Quick Prompts ───────────────────────────────────── */
+    .qp-grid {{
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }}
+    @media (max-width: 768px) {{
+        .qp-grid {{ grid-template-columns: repeat(2, 1fr); }}
+    }}
+
+    /* ── Chat Bubbles (3D slide) ───────────────────── */
+    .stChatMessage {{
+        animation: msgSlide 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        border-radius: 18px !important;
+        backdrop-filter: blur(16px) !important;
+    }}
+    @keyframes msgSlide {{
+        from {{ opacity: 0; transform: translateY(25px) scale(0.96); }}
+        to   {{ opacity: 1; transform: translateY(0) scale(1); }}
+    }}
+
+    /* ── Perf Metrics ────────────────────────────────────── */
+    .perf-metrics {{
+        display: flex;
+        gap: 0.5rem;
+        padding: 0.35rem 0;
+        flex-wrap: wrap;
+    }}
+    .perf-chip {{
+        background: linear-gradient(135deg, {t['hover_bg']}, rgba(255,255,255,0.02));
+        border: 1px solid {t['border']};
+        padding: 3px 12px;
+        border-radius: 100px;
+        font-size: 0.68rem;
+        color: {t['text_secondary']};
+        font-weight: 600;
+        backdrop-filter: blur(8px);
+    }}
+
+    /* ── Action Buttons ──────────────────────────────────── */
+    .action-row {{
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        margin-top: 0.25rem;
+    }}
+    .action-btn {{
+        background: transparent;
+        border: 1px solid {t['border']};
+        border-radius: 10px;
+        padding: 5px 14px;
+        color: {t['text_secondary']};
+        cursor: pointer;
+        font-size: 0.72rem;
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }}
+    .action-btn:hover {{
+        border-color: {t['accent']};
+        color: {t['accent']};
+        background: {t['accent_glow']};
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px {t['accent']}15;
+    }}
+
+    /* ── Score Badges ────────────────────────────────────── */
+    .score-badge {{
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 100px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        margin-left: 6px;
+    }}
+    .score-high {{ background: rgba(74,222,128,0.14); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }}
+    .score-mid  {{ background: rgba(251,191,36,0.14); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }}
+    .score-low  {{ background: rgba(248,113,113,0.14); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }}
+
+    /* ── Search Results (3D cards) ────────────────── */
+    .sr-card {{
+        background: {t['card_bg']};
+        backdrop-filter: blur(16px);
+        border: 1px solid {t['border']};
+        border-radius: 14px;
+        padding: 1.1rem 1.2rem;
+        margin-bottom: 0.8rem;
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        position: relative;
+        overflow: hidden;
+    }}
+    .sr-card::before {{
+        content: '';
+        position: absolute;
+        left: 0; top: 0; bottom: 0;
+        width: 3px;
+        background: {t['gradient']};
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }}
+    .sr-card:hover {{
+        transform: translateY(-3px) translateX(3px);
+        box-shadow: 0 12px 40px {t['accent']}15;
+        border-color: {t['accent']}35;
+    }}
+    .sr-card:hover::before {{ opacity: 1; }}
+    .sr-header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }}
+    .sr-header strong {{ color: {t['text_primary']}; }}
+    .sr-body {{
+        color: {t['text_secondary']};
+        font-size: 0.84rem;
+        line-height: 1.6;
+        margin: 0;
+    }}
+
+    /* ── Shortcut Modal ──────────────────────────── */
+    .kb-modal {{
+        background: {t['card_bg']};
+        backdrop-filter: blur(20px);
+        border: 1px solid {t['border']};
+        border-radius: 16px;
+        padding: 1.4rem 1.6rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }}
+    .kb-modal h3 {{
+        color: {t['accent']};
+        margin: 0 0 0.8rem 0;
+        font-size: 1rem;
+        font-weight: 800;
+    }}
+    .kb-row {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.4rem 0;
+        border-bottom: 1px solid {t['border']};
+        font-size: 0.82rem;
+        color: {t['text_secondary']};
+    }}
+    .kb-key {{
+        background: linear-gradient(135deg, {t['hover_bg']}, rgba(255,255,255,0.03));
+        border: 1px solid {t['border']};
+        padding: 3px 12px;
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.74rem;
+        color: {t['accent']};
+        font-weight: 500;
+    }}
+
+    /* ── Tabs (holographic bar) ───────────────────── */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 4px;
+        background: {t['card_bg']};
+        border-radius: 14px;
+        padding: 5px;
+        border: 1px solid {t['border']};
+        backdrop-filter: blur(16px);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        border-radius: 10px;
+        color: {t['text_secondary']};
+        font-weight: 600;
+        padding: 0.45rem 1.3rem;
+        transition: all 0.3s ease;
+    }}
+    .stTabs [aria-selected="true"] {{
+        background: linear-gradient(135deg, {t['accent_glow']}, {t['accent']}12) !important;
+        color: {t['accent']} !important;
+        box-shadow: 0 0 20px {t['accent']}15;
+    }}
+
+    /* ── Streamlit Elements 3D ────────────────────── */
+    .stButton > button {{
+        border-radius: 12px !important;
+        font-weight: 600 !important;
+        transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+        border: 1px solid {t['border']} !important;
+    }}
+    .stButton > button:hover {{
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px {t['accent']}15 !important;
+    }}
+    [data-testid="stTextInput"] input,
+    [data-testid="stSelectbox"] > div > div {{
+        border-radius: 12px !important;
+        border: 1px solid {t['border']} !important;
+        background: {t['hover_bg']} !important;
+        transition: all 0.3s ease !important;
+    }}
+    [data-testid="stTextInput"] input:focus {{
+        border-color: {t['accent']}60 !important;
+        box-shadow: 0 0 20px {t['accent']}10 !important;
+    }}
+    [data-testid="stExpander"] {{
+        border: 1px solid {t['border']} !important;
+        border-radius: 14px !important;
+        background: {t['card_bg']} !important;
+        backdrop-filter: blur(12px) !important;
+    }}
+
+    /* ── Chat Input 3D ───────────────────────────────── */
+    [data-testid="stChatInput"] {{
+        border-radius: 16px !important;
+        border: 1px solid {t['border']} !important;
+        background: {t['card_bg']} !important;
+        backdrop-filter: blur(16px) !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3) !important;
+        transition: all 0.3s ease !important;
+    }}
+    [data-testid="stChatInput"]:focus-within {{
+        border-color: {t['accent']}60 !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 30px {t['accent']}15 !important;
+    }}
+    [data-testid="stChatInput"] textarea {{
+        color: {t['text_primary']} !important;
+        font-family: 'Inter', sans-serif !important;
+    }}
+
+    /* ── Chat Message Containers ──────────────────────── */
+    [data-testid="stChatMessage"] {{
+        background: {t['card_bg']} !important;
+        border: 1px solid {t['border']} !important;
+        border-radius: 16px !important;
+        backdrop-filter: blur(12px) !important;
+        padding: 1rem !important;
+        margin-bottom: 0.6rem !important;
+        transition: all 0.3s ease !important;
+    }}
+    [data-testid="stChatMessage"]:hover {{
+        border-color: {t['accent']}25 !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2) !important;
+    }}
+
+    /* ── Sources Expander 3D ──────────────────────────── */
+    [data-testid="stExpander"] details {{
+        border: 1px solid {t['border']} !important;
+        border-radius: 14px !important;
+        background: {t['card_bg']} !important;
+        overflow: hidden;
+        transition: all 0.3s ease !important;
+    }}
+    [data-testid="stExpander"] summary:hover {{
+        color: {t['accent']} !important;
+    }}
+
+    /* ── File Uploader 3D ────────────────────────────── */
+    [data-testid="stFileUploader"] section {{
+        border: 2px dashed {t['border']} !important;
+        border-radius: 14px !important;
+        background: {t['hover_bg']} !important;
+        transition: all 0.3s ease !important;
+    }}
+    [data-testid="stFileUploader"] section:hover {{
+        border-color: {t['accent']}50 !important;
+        box-shadow: 0 0 20px {t['accent']}08 !important;
+    }}
+
+    /* ── Slider 3D ───────────────────────────────────── */
+    [data-testid="stSlider"] [role="slider"] {{
+        background: {t['accent']} !important;
+        box-shadow: 0 0 10px {t['accent']}40 !important;
+    }}
+
+    /* ── Scrollbar ────────────────────────────────── */
+    ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+    ::-webkit-scrollbar-track {{ background: transparent; }}
+    ::-webkit-scrollbar-thumb {{
+        background: {t['accent']}30;
+        border-radius: 10px;
+    }}
+    ::-webkit-scrollbar-thumb:hover {{ background: {t['accent']}50; }}
+
+    /* ── Streamlit Alerts 3D ──────────────────────── */
+    [data-testid="stAlert"] {{
+        border-radius: 14px !important;
+        backdrop-filter: blur(12px) !important;
+        border-width: 1px !important;
+    }}
+
+    /* ── Spinner ────────────────────────────────── */
+    .stSpinner > div {{
+        border-top-color: {t['accent']} !important;
+    }}
+
+    /* ── Divider ────────────────────────────────── */
+    [data-testid="stSidebar"] hr {{
+        border-color: {t['border']} !important;
+        opacity: 0.5;
+    }}
+
+    /* ── Markdown container ──────────────────────── */
+    .stMarkdown {{
+        color: {t['text_primary']};
+    }}
+    .stMarkdown h4 {{
+        color: {t['text_primary']} !important;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }}
+
+    /* ═══════════════════════════════════════════════════════
+       RESPONSIVE — TABLETS (≤ 1024px)
+       ═══════════════════════════════════════════════════════ */
+    @media (max-width: 1024px) {{
+        .block-container {{ padding-left: 1rem !important; padding-right: 1rem !important; }}
+        .hero {{ padding: 1.5rem 1.8rem; border-radius: 16px; transform: none; }}
+        .hero:hover {{ transform: none; }}
+        .hero h1 {{ font-size: 1.6rem; }}
+        .kpi-row {{ grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }}
+        .kpi {{ padding: 0.8rem 0.5rem; }}
+        .kpi-val {{ font-size: 1.4rem; }}
+        .sr-card {{ padding: 0.9rem; }}
+        .stTabs [data-baseweb="tab"] {{ padding: 0.4rem 0.9rem; font-size: 0.85rem; }}
+    }}
+
+    /* ═══════════════════════════════════════════════════════
+       RESPONSIVE — SMALL TABLETS & LARGE PHONES (≤ 768px)
+       ═══════════════════════════════════════════════════════ */
+    @media (max-width: 768px) {{
+        .block-container {{ padding-left: 0.5rem !important; padding-right: 0.5rem !important; padding-top: 0.4rem !important; }}
+        .bg-mesh, .bg-orb, .bg-orb2 {{ display: none; }}
+        .hero {{ padding: 1.2rem; border-radius: 14px; margin-bottom: 0.8rem; transform: none; }}
+        .hero:hover {{ transform: none; }}
+        .hero h1 {{ font-size: 1.3rem; }}
+        .hero p {{ font-size: 0.78rem; }}
+        .hero-badge {{ font-size: 0.68rem; padding: 0.25rem 0.7rem; }}
+        .hero::before {{ width: 150px; height: 150px; top: -60px; right: -40px; }}
+        .hero::after {{ width: 200px; height: 200px; }}
+        .kpi-row {{ grid-template-columns: repeat(3, 1fr); gap: 0.4rem; margin-bottom: 0.8rem; }}
+        .kpi {{ padding: 0.6rem 0.4rem; border-radius: 12px; }}
+        .kpi:hover {{ transform: none; box-shadow: none; }}
+        .kpi-val {{ font-size: 1.15rem; }}
+        .kpi-lbl {{ font-size: 0.52rem; letter-spacing: 1.5px; }}
+        .focus-bar {{ padding: 0.45rem 0.8rem; font-size: 0.75rem; border-radius: 10px; }}
+        .qp-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        .sr-card {{ padding: 0.8rem; border-radius: 12px; }}
+        .sr-card:hover {{ transform: none; }}
+        .sr-header {{ flex-direction: column; align-items: flex-start; gap: 0.3rem; }}
+        .sr-body {{ font-size: 0.78rem; }}
+        .stTabs [data-baseweb="tab-list"] {{ border-radius: 12px; padding: 3px; overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+        .stTabs [data-baseweb="tab"] {{ padding: 0.35rem 0.75rem; font-size: 0.8rem; white-space: nowrap; }}
+        .perf-chip {{ font-size: 0.62rem; padding: 2px 8px; }}
+        .action-btn {{ padding: 6px 14px; font-size: 0.7rem; min-height: 38px; }}
+        .kb-modal {{ padding: 1rem; border-radius: 14px; }}
+        .kb-row {{ font-size: 0.75rem; }}
+        [data-testid="stSidebar"] {{ min-width: 260px !important; max-width: 280px !important; }}
+        [data-testid="column"] {{ padding: 0 0.15rem !important; }}
+    }}
+
+    /* ═══════════════════════════════════════════════════════
+       RESPONSIVE — PHONES (≤ 480px)
+       ═══════════════════════════════════════════════════════ */
+    @media (max-width: 480px) {{
+        .block-container {{ padding-left: 0.3rem !important; padding-right: 0.3rem !important; padding-top: 0.2rem !important; }}
+        .hero {{ padding: 0.9rem; border-radius: 12px; margin-bottom: 0.5rem; }}
+        .hero h1 {{ font-size: 1.05rem; }}
+        .hero p {{ font-size: 0.7rem; }}
+        .hero-badge {{ font-size: 0.62rem; padding: 0.2rem 0.5rem; }}
+        .hero::before, .hero::after {{ display: none; }}
+        .kpi-row {{ grid-template-columns: repeat(2, 1fr); gap: 0.3rem; margin-bottom: 0.5rem; }}
+        .kpi {{ padding: 0.5rem 0.3rem; border-radius: 10px; }}
+        .kpi-val {{ font-size: 1rem; }}
+        .kpi-lbl {{ font-size: 0.48rem; letter-spacing: 1px; }}
+        .focus-bar {{ padding: 0.38rem 0.6rem; font-size: 0.68rem; }}
+        .sr-card {{ padding: 0.65rem; margin-bottom: 0.5rem; border-radius: 10px; }}
+        .sr-body {{ font-size: 0.72rem; line-height: 1.45; }}
+        .score-badge {{ font-size: 0.6rem; padding: 1px 7px; }}
+        .stTabs [data-baseweb="tab-list"] {{ border-radius: 10px; padding: 2px; }}
+        .stTabs [data-baseweb="tab"] {{ padding: 0.28rem 0.55rem; font-size: 0.72rem; border-radius: 8px; }}
+        .action-row {{ gap: 0.3rem; }}
+        .action-btn {{ padding: 8px 14px; font-size: 0.66rem; min-height: 42px; border-radius: 10px; flex: 1; text-align: center; }}
+        .perf-chip {{ font-size: 0.56rem; padding: 2px 7px; }}
+        .kb-modal {{ padding: 0.8rem; border-radius: 12px; }}
+        .kb-modal h3 {{ font-size: 0.88rem; }}
+        .kb-row {{ font-size: 0.68rem; padding: 0.25rem 0; }}
+        .kb-key {{ font-size: 0.64rem; padding: 1px 7px; }}
+        [data-testid="stSidebar"] {{ min-width: 240px !important; max-width: 260px !important; }}
+        .sb-brand-name {{ font-size: 1.2rem; }}
+        .sb-brand-tag {{ font-size: 0.52rem; letter-spacing: 2px; }}
+        .sb-label {{ font-size: 0.55rem; margin: 0.9rem 0 0.35rem 0; }}
+        .doc-item {{ padding: 0.38rem 0.5rem; font-size: 0.72rem; gap: 0.4rem; }}
+        .doc-icon {{ width: 24px; height: 24px; font-size: 0.75rem; border-radius: 6px; }}
+        .doc-meta {{ font-size: 0.56rem; }}
+        [data-testid="column"] {{ padding: 0 0.08rem !important; }}
+        .stChatMessage {{ padding: 0.5rem !important; }}
+        [data-testid="stSelectbox"] > div > div,
+        [data-testid="stTextInput"] > div > div > input {{ min-height: 42px !important; font-size: 0.85rem !important; }}
+        .stButton > button {{ min-height: 42px !important; font-size: 0.82rem !important; }}
+    }}
+
+    /* ═══════════════════════════════════════════════════════
+       TOUCH ENHANCEMENTS
+       ═══════════════════════════════════════════════════════ */
+    @media (hover: none) and (pointer: coarse) {{
+        .kpi:hover, .sr-card:hover {{ transform: none; box-shadow: none; }}
+        .hero {{ transform: none; }}
+        .hero:hover {{ transform: none; }}
+        .doc-item:hover {{ border-color: transparent; background: {t['hover_bg']}; transform: none; box-shadow: none; }}
+        .action-btn {{ min-height: 44px; min-width: 44px; }}
+        .stButton > button {{ min-height: 44px !important; }}
+        .block-container, [data-testid="stSidebar"] > div:first-child {{ -webkit-overflow-scrolling: touch; }}
     }}
 </style>
 """, unsafe_allow_html=True)
+
+# ── Animated background elements (injected as real HTML) ──────────────────────
+st.markdown(
+    f'<div class="bg-mesh"></div>'
+    f'<div class="bg-orb"></div>'
+    f'<div class="bg-orb2"></div>',
+    unsafe_allow_html=True,
+)
 
 
 # ── Cached resources ──────────────────────────────────────────────────────────
@@ -267,8 +1193,8 @@ def _cached_embeddings():
 
 
 @st.cache_resource
-def _cached_llm(temperature: float, model: str):
-    return get_llm(temperature=temperature, model=model)
+def _cached_llm(temperature: float, model: str, api_key: str | None = None):
+    return get_llm(temperature=temperature, model=model, api_key=api_key)
 
 
 @st.cache_resource
@@ -276,448 +1202,410 @@ def _cached_vector_db(_embeddings):
     return load_faiss_index(_embeddings)
 
 
-# ── Helper: render sources ────────────────────────────────────────────────────
-
-def _render_sources(docs, label="📎 Sources"):
-    with st.expander(f"{label} ({len(docs)} chunks)"):
-        for doc in docs:
-            source = Path(doc.metadata.get("source", "Unknown")).name
-            page = doc.metadata.get("page", "?")
-            score = doc.metadata.get("score")
-            if score is not None:
-                cls = "score-high" if score >= 0.7 else ("score-mid" if score >= 0.4 else "score-low")
-                st.markdown(
-                    f'**{source}** (Page {page}) <span class="score-badge {cls}">{score:.0%}</span>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.write(f"- **{source}** (Page {page})")
-            content = doc.page_content
-            st.caption(content[:300] + "…" if len(content) > 300 else content)
-
-
-def _build_effective_prompt():
-    """Build the effective system prompt from persona + language + custom edits."""
-    base = PERSONAS.get(st.session_state.persona, DEFAULT_SYSTEM_PROMPT)
-    lang_instruction = LANGUAGES.get(st.session_state.language, "")
-    if lang_instruction:
-        base += f"\n\nIMPORTANT: {lang_instruction}"
-    return base
-
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ═══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.title("📁 Document Control")
+    # ── Brand ────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="sb-brand">'
+        '<div class="sb-brand-name">🤖 Pro RAG</div>'
+        '<div class="sb-brand-tag">Immersive Intelligence Engine</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    # -- Indexed files --
-    st.subheader("Currently Indexed Files")
-    files = list(DATA_DIR.glob("*.*")) if DATA_DIR.exists() else []
+    # ── Documents ────────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">📚 Documents</div>', unsafe_allow_html=True)
+    files = sorted(DATA_DIR.glob("*.*")) if DATA_DIR.exists() else []
     if files:
         for f in files:
-            size_kb = f.stat().st_size / 1024
-            st.caption(f"✅ {f.name}  ({size_kb:.0f} KB)")
+            sz = f.stat().st_size / 1024
+            ext = f.suffix.lstrip(".").upper()
+            icon = "📕" if ext == "PDF" else ("📝" if ext in ("TXT", "MD") else "📄")
+            st.markdown(
+                f'<div class="doc-item">'
+                f'<div class="doc-icon">{icon}</div>'
+                f'<span class="doc-name">{html.escape(f.name)}</span>'
+                f'<span class="doc-meta">{ext} · {sz:.0f} KB</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
     else:
-        st.info("No files in data folder.")
+        st.caption("No documents indexed yet.")
 
-    st.divider()
-
-    # -- Focus mode --
-    st.subheader("🎯 Focus Mode")
+    # ── Focus Mode ───────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">🎯 Focus Mode</div>', unsafe_allow_html=True)
     focus_path = None
     if files:
         file_names = [f.name for f in files]
         selected_doc = st.selectbox(
-            "Select a document to chat with:",
+            "Focus",
             ["All Documents"] + file_names,
-            help="Narrow the AI's focus to a single document.",
+            help="Lock AI answers to a single document.",
+            label_visibility="collapsed",
         )
         if selected_doc != "All Documents":
             focus_path = DATA_DIR / selected_doc
     else:
-        st.caption("Upload files to enable focus mode.")
+        st.caption("Upload files to enable.")
 
-    st.divider()
-
-    # -- Upload & ingest --
+    # ── Upload ───────────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">📤 Upload</div>', unsafe_allow_html=True)
     uploaded = st.file_uploader(
-        "Add New Documents",
+        "Files",
+        label_visibility="collapsed",
         accept_multiple_files=True,
         type=["pdf", "txt", "md"],
     )
-
     if st.button("🚀 Ingest & Index", use_container_width=True):
         if uploaded:
             DATA_DIR.mkdir(exist_ok=True)
             for f in uploaded:
                 (DATA_DIR / f.name).write_bytes(f.getbuffer())
-            with st.status("Indexing documents…") as status:
-                st.write("Extracting and chunking content…")
+            with st.status("Indexing…") as status:
+                st.write("Chunking & embedding…")
                 ingest_all(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-                status.update(label="Index Ready!", state="complete")
+                status.update(label="✅ Index ready!", state="complete")
             st.cache_resource.clear()
             st.rerun()
         else:
-            st.warning("Please upload files first.")
+            st.warning("Upload files first.")
 
-    st.divider()
-
-    # -- URL Ingestion --
-    st.subheader("🌐 Ingest from URL")
-    url_input = st.text_input("Paste a web URL", placeholder="https://example.com/article")
-    if st.button("🔗 Fetch & Index URL", use_container_width=True):
+    # ── Web Ingest ───────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">🌐 Web Ingest</div>', unsafe_allow_html=True)
+    url_input = st.text_input("URL", placeholder="https://…", label_visibility="collapsed")
+    if st.button("🔗 Fetch & Index", use_container_width=True):
         if url_input.strip():
-            with st.status("Fetching page…") as status:
+            with st.status("Fetching…") as status:
                 ok, msg = ingest_url(url_input.strip())
                 if ok:
                     st.write(msg)
-                    st.write("Re-indexing all documents…")
                     ingest_all(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-                    status.update(label="✅ URL indexed!", state="complete")
+                    status.update(label="✅ Indexed!", state="complete")
                     st.cache_resource.clear()
                     time.sleep(1)
                     st.rerun()
                 else:
-                    status.update(label=f"❌ Failed: {msg}", state="error")
+                    status.update(label=f"❌ {msg}", state="error")
         else:
             st.warning("Paste a URL first.")
 
-    # -- Reset --
-    st.divider()
-    if st.button("🗑️ Reset All Data", use_container_width=True, type="secondary"):
-        if DATA_DIR.exists():
-            shutil.rmtree(DATA_DIR)
-        if VECTOR_DIR.exists():
-            shutil.rmtree(VECTOR_DIR)
-        st.cache_resource.clear()
-        st.session_state.history = []
-        st.session_state.response_count = 0
-        st.success("System reset!")
-        time.sleep(1)
-        st.rerun()
+    # ── Engine ───────────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">⚙️ Engine</div>', unsafe_allow_html=True)
+    temperature = st.slider("Creativity", 0.0, 1.0, DEFAULT_TEMPERATURE, help="Higher = creative · Lower = precise")
+    top_k = st.slider("Search Depth", 1, 10, TOP_K, help="Chunks retrieved per query")
 
-    st.divider()
+    # ── System Prompt ────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">✏️ System Prompt</div>', unsafe_allow_html=True)
+    with st.expander("Edit Behavior"):
+        custom_prompt = st.text_area("Prompt", value=st.session_state.system_prompt, height=110, label_visibility="collapsed")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("💾 Apply", use_container_width=True, key="sp_save"):
+                st.session_state.system_prompt = custom_prompt
+                st.success("Saved!")
+        with c2:
+            if st.button("↩ Reset", use_container_width=True, key="sp_reset"):
+                st.session_state.system_prompt = PERSONAS.get(st.session_state.persona, DEFAULT_SYSTEM_PROMPT)
+                st.rerun()
 
-    # -- Select Model --
-    st.subheader("🧠 Select Model")
-    ollama_models = list_ollama_models()
-    model_names = [m["name"] for m in ollama_models]
-    model_labels = [f"{m['name']}  ({m['size_gb']} GB)" for m in ollama_models]
-    default_idx = model_names.index(LLM_MODEL) if LLM_MODEL in model_names else 0
-    selected_model_idx = st.selectbox(
-        "Active Ollama Model",
-        range(len(model_labels)),
-        index=default_idx,
-        format_func=lambda i: model_labels[i],
-        help="Switch between locally installed Ollama models.",
-    )
-    selected_model = model_names[selected_model_idx]
+    # ── Cloud API ────────────────────────────────────────────────────
+    st.markdown('<div class="sb-label">☁️ Cloud Models</div>', unsafe_allow_html=True)
+    with st.expander("API Keys"):
+        key_input = st.text_input(
+            "OpenAI API Key",
+            value=st.session_state.openai_key,
+            type="password",
+            placeholder="sk-...",
+            label_visibility="collapsed"
+        )
+        if key_input != st.session_state.openai_key:
+            st.session_state.openai_key = key_input
+            st.rerun()
+        if st.session_state.openai_key:
+            st.caption("✅ Key active")
 
-    st.divider()
-
-    # -- Download New Model --
-    st.subheader("📥 Download Model")
-    st.caption("e.g. `gemma3:4b`, `phi4-mini`, `mistral`, `deepseek-r1:8b`")
-    new_model = st.text_input("Model name", placeholder="gemma3:4b")
-    if st.button("⬇️ Pull Model", use_container_width=True):
+    # ── Model Download ───────────────────────────────────────────────
+    st.markdown('<div class="sb-label">📥 Pull Model</div>', unsafe_allow_html=True)
+    new_model = st.text_input("Name", placeholder="gemma3:4b", label_visibility="collapsed")
+    if st.button("⬇️ Download", use_container_width=True):
         if new_model.strip():
-            with st.status(f"Downloading {new_model}…", expanded=True) as status:
-                st.write("This may take several minutes depending on model size.")
+            with st.status(f"Pulling {new_model}…", expanded=True) as status:
                 success = pull_ollama_model(new_model.strip())
                 if success:
                     status.update(label=f"✅ {new_model} ready!", state="complete")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    status.update(label=f"❌ Failed to pull {new_model}", state="error")
+                    status.update(label=f"❌ Failed", state="error")
         else:
-            st.warning("Enter a model name first.")
+            st.warning("Enter model name.")
 
-    st.divider()
-
-    # -- AI Persona --
-    st.subheader("🎭 AI Persona")
-    persona_choice = st.selectbox(
-        "Response style",
-        list(PERSONAS.keys()),
-        index=list(PERSONAS.keys()).index(st.session_state.persona),
-        label_visibility="collapsed",
-        help="Changes how the AI frames its responses — academic, creative, concise, etc.",
-    )
-    if persona_choice != st.session_state.persona:
-        st.session_state.persona = persona_choice
-        st.session_state.system_prompt = PERSONAS[persona_choice]
-
-    st.divider()
-
-    # -- Language --
-    st.subheader("🌍 Response Language")
-    lang_choice = st.selectbox(
-        "Language",
-        list(LANGUAGES.keys()),
-        index=list(LANGUAGES.keys()).index(st.session_state.language),
-        label_visibility="collapsed",
-    )
-    if lang_choice != st.session_state.language:
-        st.session_state.language = lang_choice
-
-    st.divider()
-
-    # -- Theme Selector --
-    st.subheader("🎨 Theme")
-    theme_choice = st.selectbox(
-        "Color theme",
-        list(THEMES.keys()),
-        index=list(THEMES.keys()).index(st.session_state.theme),
-        label_visibility="collapsed",
-    )
-    if theme_choice != st.session_state.theme:
-        st.session_state.theme = theme_choice
+    # ── Danger Zone ──────────────────────────────────────────────────
+    st.markdown("---")
+    if st.button("🗑️ Factory Reset", use_container_width=True, type="secondary"):
+        for d in (DATA_DIR, VECTOR_DIR):
+            if d.exists():
+                shutil.rmtree(d)
+        st.cache_resource.clear()
+        _reset_chat_state()
+        st.success("Reset complete!")
+        time.sleep(1)
         st.rerun()
 
-    st.divider()
 
-    # -- Settings --
-    st.subheader("🛠️ Settings")
-    temperature = st.slider("Creativity (Temp)", 0.0, 1.0, DEFAULT_TEMPERATURE)
-    top_k = st.slider("Search depth (k)", 1, 10, TOP_K)
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOP BAR — Popover buttons (tap to reveal each control)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    st.divider()
+ollama_models = list_ollama_models()
+model_names = [m["name"] for m in ollama_models]
+model_labels = [f"🦙 {m['name']}  ({m['size_gb']} GB)" for m in ollama_models]
 
-    # -- Custom System Prompt --
-    st.subheader("✏️ System Prompt")
-    with st.expander("Edit AI Behavior"):
-        custom_prompt = st.text_area(
-            "System prompt",
-            value=st.session_state.system_prompt,
-            height=200,
+if st.session_state.openai_key:
+    gpt_models = [
+        {"name": "gpt-4o", "label": "☁️ GPT-4o"},
+        {"name": "gpt-4-turbo", "label": "☁️ GPT-4 Turbo"},
+        {"name": "gpt-3.5-turbo", "label": "☁️ GPT-3.5 Turbo"},
+    ]
+    model_names.extend([m["name"] for m in gpt_models])
+    model_labels.extend([m["label"] for m in gpt_models])
+
+default_idx = model_names.index(LLM_MODEL) if LLM_MODEL in model_names else 0
+
+# Short display names
+_model_short = model_names[default_idx]
+_persona_short = st.session_state.persona.split(" ", 1)[-1] if " " in st.session_state.persona else st.session_state.persona
+_lang_short = st.session_state.language.split(" ", 1)[-1] if " " in st.session_state.language else st.session_state.language
+
+# ── Row of popover buttons ──────────────────────────────────────────────────
+pb1, pb2, pb3, pb4, pb5 = st.columns(5)
+
+with pb1:
+    with st.popover(f"🧠 {_model_short}", use_container_width=True):
+        selected_model_idx = st.selectbox(
+            "Select Model",
+            range(len(model_labels)),
+            index=default_idx,
+            format_func=lambda i: model_labels[i],
         )
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("💾 Save", use_container_width=True, key="save_prompt"):
-                st.session_state.system_prompt = custom_prompt
-                st.success("Saved!")
-        with c2:
-            if st.button("🔄 Reset", use_container_width=True, key="reset_prompt"):
-                st.session_state.system_prompt = PERSONAS[st.session_state.persona]
+        selected_model = model_names[selected_model_idx]
+
+with pb2:
+    with st.popover(f"🎭 {_persona_short}", use_container_width=True):
+        persona_keys = list(PERSONAS.keys())
+        persona_choice = st.selectbox(
+            "AI Persona",
+            persona_keys,
+            index=persona_keys.index(st.session_state.persona)
+                  if st.session_state.persona in persona_keys else 0,
+        )
+        if persona_choice != st.session_state.persona:
+            st.session_state.persona = persona_choice
+            st.session_state.system_prompt = PERSONAS[persona_choice]
+
+with pb3:
+    with st.popover(f"🌍 {_lang_short}", use_container_width=True):
+        lang_keys = list(LANGUAGES.keys())
+        lang_choice = st.selectbox(
+            "Language",
+            lang_keys,
+            index=lang_keys.index(st.session_state.language)
+                  if st.session_state.language in lang_keys else 0,
+        )
+        if lang_choice != st.session_state.language:
+            st.session_state.language = lang_choice
+
+with pb4:
+    with st.popover(f"🎨 {st.session_state.theme[:8]}", use_container_width=True):
+        theme_keys = list(THEMES.keys())
+        theme_choice = st.selectbox(
+            "Color Theme",
+            theme_keys,
+            index=theme_keys.index(st.session_state.theme)
+                  if st.session_state.theme in theme_keys else 0,
+        )
+        if theme_choice != st.session_state.theme:
+            st.session_state.theme = theme_choice
+            st.rerun()
+
+with pb5:
+    with st.popover(f"💬 {st.session_state.active_session[:10]}", use_container_width=True):
+        session_name = st.text_input(
+            "Session Name", value=st.session_state.active_session,
+        )
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            if st.button("💾 Save", use_container_width=True, key="tb_save"):
+                if session_name.strip():
+                    st.session_state.saved_sessions[session_name] = list(st.session_state.history)
+                    st.session_state.active_session = session_name
+                    _save_sessions()
+                    st.toast("💾 Saved!")
+        with sc2:
+            if st.button("🆕 New", use_container_width=True, key="tb_new"):
+                if st.session_state.history and st.session_state.active_session:
+                    st.session_state.saved_sessions[st.session_state.active_session] = list(st.session_state.history)
+                    _save_sessions()
+                st.session_state.active_session = f"Chat {len(st.session_state.saved_sessions) + 1}"
+                _reset_chat_state()
+                st.rerun()
+        with sc3:
+            if st.button("🧹 Clear", use_container_width=True, key="tb_clear"):
+                _reset_chat_state()
                 st.rerun()
 
-    st.divider()
+        if st.session_state.saved_sessions:
+            st.markdown("---")
+            load_session = st.selectbox(
+                "Load Session",
+                ["—"] + list(st.session_state.saved_sessions.keys()),
+            )
+            if load_session != "—":
+                if st.button("📂 Load", use_container_width=True, key="load_btn"):
+                    st.session_state.history = list(st.session_state.saved_sessions[load_session])
+                    st.session_state.active_session = load_session
+                    st.session_state.followups = []
+                    st.rerun()
 
-    # -- Chat Sessions --
-    st.subheader("💬 Chat Sessions")
-    session_name = st.text_input("Session name", value=st.session_state.active_session)
-    col_save, col_new = st.columns(2)
-    with col_save:
-        if st.button("💾 Save", use_container_width=True, key="save_session"):
-            if session_name.strip():
-                st.session_state.saved_sessions[session_name] = list(st.session_state.history)
-                st.session_state.active_session = session_name
-                _save_sessions()
-                st.success(f"Saved '{session_name}'")
-    with col_new:
-        if st.button("🆕 New", use_container_width=True):
-            if st.session_state.history and st.session_state.active_session:
-                st.session_state.saved_sessions[st.session_state.active_session] = list(st.session_state.history)
-                _save_sessions()
-            st.session_state.history = []
-            st.session_state.active_session = f"Chat {len(st.session_state.saved_sessions) + 1}"
-            st.session_state.response_count = 0
-            st.session_state.followups = []
-            st.rerun()
-
-    if st.session_state.saved_sessions:
-        load_session = st.selectbox("Load session", ["—"] + list(st.session_state.saved_sessions.keys()))
-        if load_session != "—" and st.button("📂 Load", use_container_width=True):
-            st.session_state.history = list(st.session_state.saved_sessions[load_session])
-            st.session_state.active_session = load_session
-            st.session_state.followups = []
-            st.rerun()
-
-    st.divider()
-
-    # -- Export & Clear --
-    col_exp, col_clr = st.columns(2)
-    with col_exp:
         if st.session_state.history:
-            lines = [
-                f"# Pro RAG Chat Export",
+            st.markdown("---")
+            exp_c1, exp_c2 = st.columns(2)
+            
+            # Markdown Export
+            lines_exp = [
+                "# Pro RAG Chat Export",
                 f"_Session: {st.session_state.active_session}_",
-                f"_Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}_",
-                f"_Model: {selected_model}_",
-                f"_Persona: {st.session_state.persona}_\n",
+                f"_Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n",
             ]
             for msg in st.session_state.history:
-                role = "**You**" if msg["role"] == "user" else "**Assistant**"
-                lines.append(f"{role}: {msg['content']}\n")
-            st.download_button(
-                "📄 Export",
-                data="\n".join(lines),
-                file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
-    with col_clr:
-        if st.button("🧹 Clear", use_container_width=True):
-            st.session_state.history = []
-            st.session_state.response_count = 0
-            st.session_state.total_tokens = 0
-            st.session_state.total_time = 0.0
-            st.session_state.followups = []
-            st.rerun()
+                role = "**You**" if msg["role"] == "user" else "**AI**"
+                lines_exp.append(f"{role}: {msg['content']}\n")
+            
+            with exp_c1:
+                st.download_button(
+                    "📄 Export MD",
+                    data="\n".join(lines_exp),
+                    file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
 
-    st.divider()
-
-    # -- Keyboard shortcuts --
-    if st.button("⌨️ Keyboard Shortcuts", use_container_width=True):
-        st.session_state.show_shortcuts = not st.session_state.show_shortcuts
+            # PDF Export
+            with exp_c2:
+                pdf_bytes = _generate_chat_pdf(
+                    st.session_state.active_session,
+                    st.session_state.history,
+                    model=selected_model
+                )
+                st.download_button(
+                    "📕 Export PDF",
+                    data=bytes(pdf_bytes),
+                    file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
 
 
 # ── Initialise resources ──────────────────────────────────────────────────────
 
-embeddings = _cached_embeddings()
-vector_db = _cached_vector_db(embeddings)
-llm = _cached_llm(temperature, selected_model)
+try:
+    embeddings = _cached_embeddings()
+    vector_db = _cached_vector_db(embeddings)
+    llm = _cached_llm(temperature, selected_model, api_key=st.session_state.openai_key)
+except Exception as e:
+    st.error(f"Failed to initialize AI engine: {e}")
+    st.stop()
 
-# ── Main area — Tabs ──────────────────────────────────────────────────────────
-
-tab_chat, tab_search, tab_summary = st.tabs(["💬 Chat", "🔍 Search", "📑 Summaries"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1: CHAT
+# TABS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+tab_chat, tab_search, tab_summary = st.tabs(["💬  Chat", "🔍  Search", "📑  Summaries"])
+
+
+# ── TAB 1: CHAT ──────────────────────────────────────────────────────────────
 
 with tab_chat:
-    # Header
-    st.markdown(f"""
-    <div class="main-header">
-        <h1>🤖 Pro RAG Chatbot</h1>
-        <p>Chat with your documents locally and privately.</p>
-        <div class="model-badge">🧠 {selected_model}</div>
-        <div class="session-badge">💬 {st.session_state.active_session} &nbsp;|&nbsp; {st.session_state.persona} &nbsp;|&nbsp; {st.session_state.language}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Hero banner
+    st.markdown(
+        f'<div class="hero">'
+        f'<h1>🤖 Pro RAG Intelligence</h1>'
+        f'<p>Explore your documents with AI — private, powerful, precise.</p>'
+        f'<div class="hero-badge">🧠 {html.escape(selected_model)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Keyboard shortcuts modal
+    # Keyboard shortcuts
     if st.session_state.show_shortcuts:
-        st.markdown(f"""
-        <div class="shortcut-modal">
-            <h3>⌨️ Keyboard Shortcuts</h3>
-            <div class="shortcut-row"><span>Focus chat input</span><span class="shortcut-key">/</span></div>
-            <div class="shortcut-row"><span>Send message</span><span class="shortcut-key">Enter</span></div>
-            <div class="shortcut-row"><span>New line in message</span><span class="shortcut-key">Shift + Enter</span></div>
-            <div class="shortcut-row"><span>Toggle sidebar</span><span class="shortcut-key">Ctrl + [</span></div>
-            <div class="shortcut-row"><span>Toggle wide mode</span><span class="shortcut-key">Settings → Wide</span></div>
-            <div class="shortcut-row"><span>Rerun app</span><span class="shortcut-key">R</span></div>
-            <div class="shortcut-row"><span>Clear cache</span><span class="shortcut-key">C</span></div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="kb-modal">'
+            '<h3>⌨️ Keyboard Shortcuts</h3>'
+            '<div class="kb-row"><span>Focus chat input</span><span class="kb-key">/</span></div>'
+            '<div class="kb-row"><span>Send message</span><span class="kb-key">Enter</span></div>'
+            '<div class="kb-row"><span>New line</span><span class="kb-key">Shift+Enter</span></div>'
+            '<div class="kb-row"><span>Toggle sidebar</span><span class="kb-key">Ctrl+[</span></div>'
+            '<div class="kb-row"><span>Rerun app</span><span class="kb-key">R</span></div>'
+            '<div class="kb-row"><span>Clear cache</span><span class="kb-key">C</span></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    # Analytics Dashboard
+    # KPI dashboard
     if vector_db is not None:
         stats = get_index_stats(vector_db)
-        avg_time = (st.session_state.total_time / st.session_state.response_count
-                    if st.session_state.response_count > 0 else 0)
-        st.markdown(f"""
-        <div class="stats-row">
-            <div class="stat-card">
-                <div class="stat-value">{stats['unique_sources']}</div>
-                <div class="stat-label">Documents</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{stats['total_pages']}</div>
-                <div class="stat-label">Pages</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{stats['total_chunks']}</div>
-                <div class="stat-label">Chunks</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{st.session_state.response_count}</div>
-                <div class="stat-label">Queries</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{avg_time:.1f}s</div>
-                <div class="stat-label">Avg Time</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{st.session_state.total_tokens}</div>
-                <div class="stat-label">Tokens</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        avg_t = (
+            st.session_state.total_time / st.session_state.response_count
+            if st.session_state.response_count > 0 else 0
+        )
+        st.markdown(
+            '<div class="kpi-row">'
+            f'<div class="kpi"><div class="kpi-val">{stats["unique_sources"]}</div><div class="kpi-lbl">Documents</div></div>'
+            f'<div class="kpi"><div class="kpi-val">{stats["total_pages"]}</div><div class="kpi-lbl">Pages</div></div>'
+            f'<div class="kpi"><div class="kpi-val">{stats["total_chunks"]}</div><div class="kpi-lbl">Chunks</div></div>'
+            f'<div class="kpi"><div class="kpi-val">{st.session_state.response_count}</div><div class="kpi-lbl">Queries</div></div>'
+            f'<div class="kpi"><div class="kpi-val">{avg_t:.1f}s</div><div class="kpi-lbl">Avg Time</div></div>'
+            f'<div class="kpi"><div class="kpi-val">{st.session_state.total_tokens}</div><div class="kpi-lbl">Tokens</div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     if vector_db is None:
         st.warning("No document index found. Upload and ingest documents in the sidebar.")
         st.stop()
 
-    # Focus mode indicator
+    # Focus indicator
     if focus_path:
         st.markdown(
-            f'<div class="focus-indicator">🎯 Focus Mode: <strong>{focus_path.name}</strong></div>',
+            f'<div class="focus-bar">🎯 <strong>Focus Mode:</strong>&nbsp; {html.escape(focus_path.name)}</div>',
             unsafe_allow_html=True,
         )
 
-    # Quick prompt suggestions (only when chat is empty)
+    # Quick prompts
     if not st.session_state.history:
         st.markdown("#### ⚡ Quick Prompts")
         qp_cols = st.columns(4)
-        quick_prompts = [
-            ("📋 Summarize", "Provide a detailed summary of the document."),
-            ("🔑 Key Points", "What are the key points and main takeaways?"),
-            ("❓ What is this?", "What is this document about? Give an overview."),
-            ("👤 Author Info", "Who is the author and what are their credentials?"),
-            ("📊 Main Topics", "List all the main topics covered in this document."),
-            ("💡 Key Insights", "What are the most interesting insights from this document?"),
-            ("📖 Chapter List", "List all chapters or sections in this document."),
-            ("🎯 Conclusions", "What are the main conclusions or recommendations?"),
-        ]
-        for i, (label, prompt_text) in enumerate(quick_prompts):
+        for i, (label, prompt_text) in enumerate(QUICK_PROMPTS):
             with qp_cols[i % 4]:
                 if st.button(label, use_container_width=True, key=f"qp_{i}"):
                     st.session_state.history.append({"role": "user", "content": prompt_text})
                     st.rerun()
 
-    # Display chat history
+    # Chat history
     for idx, msg in enumerate(st.session_state.history):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
             if msg["role"] == "assistant":
-                # Response metrics
-                resp_time = msg.get("time", 0)
-                resp_tokens = msg.get("tokens", 0)
-                if resp_time or resp_tokens:
-                    tps = resp_tokens / resp_time if resp_time > 0 else 0
-                    st.markdown(
-                        f'<div class="response-metrics">'
-                        f'<span class="metric-item">⏱️ {resp_time:.1f}s</span>'
-                        f'<span class="metric-item">📝 {resp_tokens} tokens</span>'
-                        f'<span class="metric-item">⚡ {tps:.1f} tok/s</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                # Action buttons row
-                content_safe = msg["content"].replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")[:1000]
-                tts_safe = msg["content"].replace("'", "\\'").replace("\n", " ")[:500]
-                st.markdown(
-                    f"""<div class="action-row">
-                        <button class="copy-btn" onclick="navigator.clipboard.writeText('{content_safe}').then(()=>this.textContent='✅ Copied!')">
-                            📋 Copy
-                        </button>
-                        <button class="copy-btn" onclick="
-                            if(window.speechSynthesis.speaking){{window.speechSynthesis.cancel();this.textContent='🔊 Read Aloud';}}
-                            else{{const u=new SpeechSynthesisUtterance('{tts_safe}');u.rate=1.0;window.speechSynthesis.speak(u);this.textContent='⏹️ Stop';}}
-                        ">🔊 Read Aloud</button>
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-
+                _render_metrics(msg.get("time", 0), msg.get("tokens", 0))
+                _render_action_buttons(msg["content"], t, key_suffix=f"hist_{idx}")
             if msg.get("docs"):
                 _render_sources(msg["docs"])
 
-    # Suggested follow-up questions
+    # Follow-ups
     if st.session_state.followups:
         st.markdown("#### 🔗 Suggested Follow-ups")
         fu_cols = st.columns(min(len(st.session_state.followups), 3))
@@ -728,24 +1616,29 @@ with tab_chat:
                     st.session_state.followups = []
                     st.rerun()
 
-    # Regenerate button
-    if (st.session_state.history
-            and len(st.session_state.history) >= 2
-            and st.session_state.history[-1]["role"] == "assistant"):
-        if st.button("🔄 Regenerate Last Response", use_container_width=False):
-            # Remove last assistant message, keep the user query
+    # Regenerate
+    if len(st.session_state.history) >= 2 and st.session_state.history[-1]["role"] == "assistant":
+        if st.button("🔄 Regenerate Last Response"):
             st.session_state.history.pop()
             st.session_state.followups = []
             st.rerun()
 
-    # Handle new input
-    if prompt := st.chat_input("Ask about your documents…"):
-        if not st.session_state.history or st.session_state.history[-1].get("content") != prompt:
-            st.session_state.history.append({"role": "user", "content": prompt})
+    # ── Determine if we need to generate a response ──────────────────────
+    pending_prompt = None
 
+    # Check if last message is an unanswered user message (from quick prompt / follow-up / regenerate)
+    if st.session_state.history and st.session_state.history[-1]["role"] == "user":
+        pending_prompt = st.session_state.history[-1]["content"]
+
+    # Chat input (new message from the text box)
+    if new_input := st.chat_input("Ask about your documents…"):
+        st.session_state.history.append({"role": "user", "content": new_input})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(new_input)
+        pending_prompt = new_input
 
+    # ── Generate AI response if there's a pending prompt ─────────────────
+    if pending_prompt:
         with st.chat_message("assistant"):
             placeholder = st.empty()
             full_response = ""
@@ -753,11 +1646,8 @@ with tab_chat:
             start_time = time.time()
 
             effective_prompt = _build_effective_prompt()
-
             stream, docs = get_rag_stream_with_scores(
-                query=prompt,
-                db=vector_db,
-                llm=llm,
+                pending_prompt, vector_db, llm,
                 top_k=top_k,
                 filter_path=focus_path,
                 chat_history=st.session_state.history[:-1],
@@ -773,34 +1663,9 @@ with tab_chat:
             elapsed = time.time() - start_time
             placeholder.markdown(full_response)
 
-            # Show metrics
-            tps = token_count / elapsed if elapsed > 0 else 0
-            st.markdown(
-                f'<div class="response-metrics">'
-                f'<span class="metric-item">⏱️ {elapsed:.1f}s</span>'
-                f'<span class="metric-item">📝 {token_count} tokens</span>'
-                f'<span class="metric-item">⚡ {tps:.1f} tok/s</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            _render_metrics(elapsed, token_count)
+            _render_action_buttons(full_response, t, key_suffix="new")
 
-            # Action buttons
-            content_safe = full_response.replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")[:1000]
-            tts_safe = full_response.replace("'", "\\'").replace("\n", " ")[:500]
-            st.markdown(
-                f"""<div class="action-row">
-                    <button class="copy-btn" onclick="navigator.clipboard.writeText('{content_safe}').then(()=>this.textContent='✅ Copied!')">
-                        📋 Copy
-                    </button>
-                    <button class="copy-btn" onclick="
-                        if(window.speechSynthesis.speaking){{window.speechSynthesis.cancel();this.textContent='🔊 Read Aloud';}}
-                        else{{const u=new SpeechSynthesisUtterance('{tts_safe}');u.rate=1.0;window.speechSynthesis.speak(u);this.textContent='⏹️ Stop';}}
-                    ">🔊 Read Aloud</button>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-
-            # Update stats
             st.session_state.response_count += 1
             st.session_state.total_tokens += token_count
             st.session_state.total_time += elapsed
@@ -815,96 +1680,89 @@ with tab_chat:
 
             _render_sources(docs)
 
-            # Generate follow-up suggestions (async-ish)
-            with st.spinner("Generating follow-up suggestions…"):
-                followups = generate_followups(prompt, full_response, llm)
-                st.session_state.followups = followups
+            with st.spinner("Generating follow-ups…"):
+                st.session_state.followups = generate_followups(pending_prompt, full_response, llm)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2: SEMANTIC SEARCH
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── TAB 2: SEARCH ──────────────────────────────────────────────────────────
 
 with tab_search:
-    st.markdown(f"""
-    <div class="main-header">
-        <h1>🔍 Semantic Search</h1>
-        <p>Search your documents without asking the AI — find relevant passages directly.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero">'
+        '<h1>🔍 Deep Semantic Search</h1>'
+        '<p>Surface relevant passages from your knowledge base instantly.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     if vector_db is None:
         st.warning("No document index. Upload and ingest documents first.")
     else:
         search_query = st.text_input("Search query", placeholder="Enter a topic or phrase…", key="search_q")
-        search_k = st.slider("Number of results", 1, 20, 10, key="search_k")
+        search_k = st.slider("Results", 1, 20, 10, key="search_k")
 
         if search_query:
             results = semantic_search(vector_db, search_query, top_k=search_k, filter_path=focus_path)
-
             if results:
-                st.markdown(f"**{len(results)}** results for *\"{search_query}\"*")
-                for i, r in enumerate(results):
+                st.markdown(f'**{len(results)}** results for *"{html.escape(search_query)}"*')
+                for r in results:
                     score = r["score"]
                     cls = "score-high" if score >= 0.7 else ("score-mid" if score >= 0.4 else "score-low")
                     st.markdown(
-                        f"""<div class="search-result">
-                            <div class="search-result-header">
-                                <span><strong>{r['source']}</strong> · Page {r['page']}</span>
-                                <span class="score-badge {cls}">{score:.0%} match</span>
-                            </div>
-                            <p style="color:#ccc; font-size:0.9rem; margin:0;">{r['content'][:500]}</p>
-                        </div>""",
+                        f'<div class="sr-card">'
+                        f'<div class="sr-header">'
+                        f'<span><strong>{html.escape(r["source"])}</strong> · Page {r["page"]}</span>'
+                        f'<span class="score-badge {cls}">{score:.0%}</span>'
+                        f'</div>'
+                        f'<p class="sr-body">{html.escape(r["content"][:500])}</p>'
+                        f'</div>',
                         unsafe_allow_html=True,
                     )
             else:
                 st.info("No results found.")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3: DOCUMENT SUMMARIES
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── TAB 3: SUMMARIES ──────────────────────────────────────────────────────
 
 with tab_summary:
-    st.markdown(f"""
-    <div class="main-header">
-        <h1>📑 Document Summaries</h1>
-        <p>Generate AI-powered summaries for each indexed document.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero">'
+        '<h1>📑 AI-Powered Summaries</h1>'
+        '<p>Generate comprehensive overviews of your indexed documents.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     if vector_db is None:
         st.warning("No document index. Upload and ingest documents first.")
     elif not files:
         st.info("No documents found.")
     else:
-        # Initialize summaries storage
-        if "doc_summaries" not in st.session_state:
-            st.session_state.doc_summaries = {}
-
         for f in files:
             with st.expander(f"📄 {f.name}  ({f.stat().st_size / 1024:.0f} KB)", expanded=False):
-                # Show existing summary
                 if f.name in st.session_state.doc_summaries:
                     st.markdown(st.session_state.doc_summaries[f.name])
-                    if st.button(f"🔄 Regenerate", key=f"regen_{f.name}"):
+                    if st.button("🔄 Regenerate", key=f"regen_{f.name}"):
                         del st.session_state.doc_summaries[f.name]
                         st.rerun()
                 else:
-                    st.caption("No summary generated yet.")
-                    if st.button(f"✨ Generate Summary", key=f"gen_{f.name}", use_container_width=True):
+                    st.caption("No summary yet.")
+                    if st.button("✨ Generate Summary", key=f"gen_{f.name}", use_container_width=True):
                         with st.spinner(f"Summarizing {f.name}…"):
-                            # Search for this specific document's content
                             doc_results = semantic_search(
                                 vector_db, "summary overview main content",
                                 top_k=8, filter_path=DATA_DIR / f.name,
                             )
                             if doc_results:
-                                context = "\n\n".join([r["content"] for r in doc_results])
-                                from langchain_core.messages import SystemMessage, HumanMessage
+                                context = "\n\n".join(r["content"] for r in doc_results)
                                 msgs = [
-                                    SystemMessage(content="You are a document summarizer. Provide a comprehensive, well-structured summary of the document content provided below. Use markdown formatting with headers and bullet points."),
-                                    HumanMessage(content=f"Document: {f.name}\n\nContent:\n{context}\n\nProvide a detailed summary:"),
+                                    SystemMessage(content=(
+                                        "You are a document summarizer. Provide a comprehensive, "
+                                        "well-structured summary. Use markdown with headers and bullets."
+                                    )),
+                                    HumanMessage(content=(
+                                        f"Document: {f.name}\n\nContent:\n{context}\n\nProvide a detailed summary:"
+                                    )),
                                 ]
                                 result = llm.invoke(msgs)
                                 summary = getattr(result, "content", str(result))
@@ -913,13 +1771,12 @@ with tab_summary:
                             else:
                                 st.warning("Could not retrieve content for this document.")
 
-        # Export all summaries
         if st.session_state.doc_summaries:
             st.divider()
-            all_summaries = "\n\n---\n\n".join([
+            all_summaries = "\n\n---\n\n".join(
                 f"# {name}\n\n{summary}"
                 for name, summary in st.session_state.doc_summaries.items()
-            ])
+            )
             st.download_button(
                 "📄 Export All Summaries",
                 data=all_summaries,

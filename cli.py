@@ -5,9 +5,11 @@ Usage:
     python cli.py
 """
 
+from __future__ import annotations
+
 from src.config import DEFAULT_TEMPERATURE, TOP_K
+from src.core import get_rag_stream
 from src.utils import get_embeddings, get_llm, load_faiss_index
-from src.core import get_retriever, get_rag_stream
 
 
 def main() -> None:
@@ -24,6 +26,9 @@ def main() -> None:
         print("Error: No vector index found. Run ingestion first (or use the GUI).")
         return
 
+    retriever = get_rag_stream.__wrapped__ if hasattr(get_rag_stream, "__wrapped__") else None  # noqa
+    # Build retriever
+    from src.core import get_retriever
     retriever = get_retriever(db, top_k=TOP_K)
 
     try:
@@ -33,6 +38,8 @@ def main() -> None:
         return
 
     print("System ready! Type 'exit' to quit.\n")
+
+    history: list[dict[str, str]] = []
 
     while True:
         try:
@@ -44,10 +51,20 @@ def main() -> None:
 
             print("\033[92mBot:\033[0m ", end="", flush=True)
 
-            stream, _docs = get_rag_stream(query, retriever, llm)
+            stream, _docs = get_rag_stream(query, retriever, llm, chat_history=history)
+            full_response = ""
             for chunk in stream:
-                print(getattr(chunk, "content", str(chunk)), end="", flush=True)
+                content = getattr(chunk, "content", str(chunk))
+                full_response += content
+                print(content, end="", flush=True)
             print("\n")
+
+            # Maintain conversation history
+            history.append({"role": "user", "content": query})
+            history.append({"role": "assistant", "content": full_response})
+            # Keep last 10 turns
+            if len(history) > 20:
+                history = history[-20:]
 
         except KeyboardInterrupt:
             print("\nGoodbye!")

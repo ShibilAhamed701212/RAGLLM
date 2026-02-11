@@ -27,3 +27,5 @@ Thumbs.db
 # Gemini
 .gemini/
 .agent/
+
+.chat_sessions.json
