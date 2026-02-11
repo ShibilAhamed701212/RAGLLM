@@ -9,3 +9,5 @@ faiss-cpu
 python-dotenv
 pypdf
 requests
+
+fpdf2

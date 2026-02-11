@@ -11,34 +11,34 @@ A powerful **Retrieval-Augmented Generation (RAG)** chatbot that lets you chat w
 
 ---
 
-## ✨ Features
-
 ### 🔒 Core
-- **Fully Local & Private** — Your documents never leave your machine. No cloud APIs required.
-- **Multi-Format Support** — Upload and chat with PDFs, `.txt`, and `.md` files.
-- **🌐 URL Ingestion** — Paste any web URL to fetch and index the page content.
-- **⚡ Streaming Responses** — Real-time token-by-token output for a smooth chat experience.
-- **🖥️ CLI Mode** — Prefer the terminal? Use `cli.py` for a command-line chat interface.
+- **Hybrid Intelligence** — Use **Local (Ollama)** for privacy or **Cloud (OpenAI)** for power. Sidebar API Key input supported.
+- **Multi-Format Support** — PDF, TXT, MD uploads + URL Web Ingestion.
+- **⚡ Streaming Responses** — Real-time token generation for smooth chatting.
+- **🖥️ CLI Mode** — Run `python cli.py` for terminal-based interactions.
 
 ### 🧠 Intelligence
-- **💬 Conversation Memory** — Follow-up questions work naturally with 6-turn context window.
-- **🔍 Relevance Scores** — Color-coded confidence badges (🟢 high / 🟡 mid / 🔴 low) on every source.
-- **🎯 Focus Mode** — Lock the AI's attention to a single document for precise answers.
-- **✏️ Custom System Prompt** — Tune the AI's behavior and personality from the sidebar.
-- **⚡ Quick Prompts** — One-click starter suggestions (Summarize, Key Points, Author Info, etc.).
+- **💬 Conversation Memory** — Context-aware follow-ups.
+- **🔍 Relevance Scores** — Trust badges (🟢/🟡/🔴) on every retrieved chunk.
+- **🎯 Focus Mode** — Lock the AI to a specific document.
+- **✏️ System Prompt** — Customize the AI's personality.
+- **⚡ Quick Prompts** — One-click summaries and key points.
 
 ### 🎨 Experience
-- **🎨 5 Color Themes** — Midnight Purple, Ocean Blue, Emerald, Sunset, Rose Gold.
-- **📊 Analytics Dashboard** — Live stats: documents, pages, chunks, queries, avg response time, tokens.
-- **⏱️ Response Metrics** — Per-answer timing, token count, and tokens/second.
-- **🔊 Text-to-Speech** — Click "Read Aloud" to hear any answer spoken by the browser.
-- **💬 Chat Sessions** — Save, name, and switch between multiple conversations.
-- **💾 Export Chat** — Download your conversation as a Markdown file.
+- **🌟 3D Immersive UI** — Glassmorphism, animated backgrounds, and neon accents.
+- **📊 Analytics Dashboard** — Live stats on documents and performance.
+- **⏱️ Response Metrics** — Detailed timing and token counts.
+- **🔊 Text-to-Speech** — Listen to answers directly in the browser.
+- **💾 Export Options** — Download chat history as **Markdown** or **PDF**.
 
 ### 🛠️ Model Management
-- **🧠 Dynamic Model Switching** — Switch between any locally installed Ollama model instantly.
-- **📥 Download Models from UI** — Pull new Ollama models directly from the sidebar.
-- **🔧 Configurable** — Tune temperature, search depth, chunk size, and more via `.env` or the UI.
+- **🧠 Dynamic Switching** — Swap models instantly (Ollama or OpenAI).
+- **📥 Model Pulling** — Download new Ollama models from the UI.
+- **🔧 API Key Management** — Secure input for cloud providers.
+
+---
+
+> **For detailed setup, configuration, and architecture, see [Project Essentials & Developer Guide](docs/PROJECT_ESSENTIALS.md).**
 
 ---
 
